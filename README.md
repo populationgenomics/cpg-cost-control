@@ -39,6 +39,7 @@ notifications for _all_ projects.
 1. Deploy the Cloud Function, replacing `$BILLING_ADMIN_PROJECT`, `$REGION`,
    `$SERVICE_ACCOUNT`, and `$SLACK_CHANNEL` accordingly:
    ```
+   cd gcp_cost_control
    gcloud config set project $BILLING_ADMIN_PROJECT
    gcloud functions deploy gcp_cost_control --runtime python37 \
      --region=$REGION \
@@ -61,7 +62,7 @@ Create a separate budget for each project that you'd like to cap billing for.
 
 To test the full setup, you can publish the following Pub/Sub message to the
 `budget-notifications` topic in the `billing-admin` project, replacing
-\$TEST_PROJECT accordingly. However, make sure that it's not a problem to shut
+`$TEST_PROJECT` accordingly. However, make sure that it's not a problem to shut
 down the whole project when billing gets disabled temporarily. If there are any
 issues, check the logs for the `gcp-cost-control` Cloud Function.
 
@@ -75,4 +76,67 @@ issues, check the logs for the `gcp-cost-control` Cloud Function.
     "budgetAmountType": "SPECIFIED_AMOUNT",
     "currencyCode": "USD"
 }
+```
+
+## Daily cost reports
+
+The [gcp_cost_report](gcp_cost_report.py) Cloud Function can be used to get a
+daily per-project cost report in Slack.
+
+1. Set up [Cloud Billing data export to BigQuery](https://cloud.google.com/billing/docs/how-to/export-data-bigquery)
+   in the `billing-admin` project. Replace `$BIGQUERY_BILLING_TABLE` below
+   with the corresponding table name, e.g.
+   `billing-admin-123456.billing.gcp_billing_export_v1_012345_ABCDEF_123456`.
+1. Grant the service account _BigQuery Job User_ and _BigQuery Data Viewer_ role
+   permissions.
+1. Create a new Pub/Sub topic in the `billing-admin` project, named
+   `cost-report`.
+1. Create a Cloud Scheduler job that posts a Pub/Sub message to the
+   `cost-report` topic, e.g. using a daily schedule like `0 9 * * *`.
+   The payload can be abitrary, as it is ignored in the Cloud Function.
+1. Install the Cloud Function that gets triggered when a message to the
+   `cost-report` Pub/Sub topic is posted.
+   ```
+   cd gcp_cost_report
+   gcloud config set project $BILLING_ADMIN_PROJECT
+   gcloud functions deploy gcp_cost_report --runtime python37 \
+     --region=$REGION \
+     --trigger-topic cost-report \
+     --service-account $SERVICE_ACCOUNT \
+     --set-env-vars SLACK_CHANNEL=$SLACK_CHANNEL \
+     --set-env-vars BIGQUERY_BILLING_TABLE=$BIGQUERY_BILLING_TABLE
+   ```
+
+## Individiual billing items
+
+To drill down on the recent cost incurred by a particular `$PROJECT`, the
+following query can be helpful:
+
+```sql
+SELECT
+  *
+FROM
+  (
+    SELECT
+      FORMAT_TIMESTAMP("%F", usage_start_time) as day,
+      service.description as service,
+      sku.description as sku,
+      ROUND(sum(cost), 2) as cost,
+      currency
+    FROM
+      `$BIGQUERY_BILLING_TABLE`
+    WHERE
+      _PARTITIONTIME >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 8 DAY)
+      AND project.id = `$PROJECT`
+    GROUP BY
+      day,
+      service,
+      sku,
+      currency
+  )
+WHERE
+  cost > 0.1
+ORDER BY
+  day DESC,
+  cost DESC;
 ```
