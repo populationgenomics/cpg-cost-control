@@ -95,7 +95,8 @@ daily per-project cost report in Slack.
    `cost-report` topic, e.g. using a daily schedule like `0 9 * * *`.
    The payload can be abitrary, as it is ignored in the Cloud Function.
 1. Install the Cloud Function that gets triggered when a message to the
-   `cost-report` Pub/Sub topic is posted.
+   `cost-report` Pub/Sub topic is posted. Set `$QUERY_TIME_ZONE` to your local
+   time zone, e.g. `Australia/Sydney`.
    ```
    cd gcp_cost_report
    gcloud config set project $BILLING_ADMIN_PROJECT
@@ -104,7 +105,8 @@ daily per-project cost report in Slack.
      --trigger-topic cost-report \
      --service-account $SERVICE_ACCOUNT \
      --set-env-vars SLACK_CHANNEL=$SLACK_CHANNEL \
-     --set-env-vars BIGQUERY_BILLING_TABLE=$BIGQUERY_BILLING_TABLE
+     --set-env-vars BIGQUERY_BILLING_TABLE=$BIGQUERY_BILLING_TABLE \
+     --set-env-vars QUERY_TIME_ZONE=$QUERY_TIME_ZONE
    ```
 
 ## Individiual billing items
@@ -118,7 +120,7 @@ SELECT
 FROM
   (
     SELECT
-      FORMAT_TIMESTAMP("%F", usage_start_time) as day,
+      FORMAT_TIMESTAMP("%F", export_time) as day,
       service.description as service,
       sku.description as sku,
       ROUND(sum(cost), 2) as cost,
@@ -127,7 +129,7 @@ FROM
       `$BIGQUERY_BILLING_TABLE`
     WHERE
       _PARTITIONTIME >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 8 DAY)
-      AND project.id = `$PROJECT`
+      AND project.id = "$PROJECT"
     GROUP BY
       day,
       service,
