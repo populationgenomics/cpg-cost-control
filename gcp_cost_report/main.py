@@ -11,8 +11,9 @@ from google.cloud import secretmanager
 import slack
 from slack.errors import SlackApiError
 
-PROJECT_ID = os.getenv('GCP_PROJECT')
-BIGQUERY_BILLING_TABLE = os.getenv('BIGQUERY_BILLING_TABLE')
+PROJECT_ID = os.getenv("GCP_PROJECT")
+BIGQUERY_BILLING_TABLE = os.getenv("BIGQUERY_BILLING_TABLE")
+QUERY_TIME_ZONE = os.getenv("QUERY_TIME_ZONE") or "UTC"
 
 # Query monthly cost per project and join that with cost over the last day.
 BIGQUERY_QUERY = f"""
@@ -35,7 +36,8 @@ FROM
           `{BIGQUERY_BILLING_TABLE}`
         WHERE
           _PARTITIONTIME >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 32 DAY)
-          AND invoice.month = FORMAT_TIMESTAMP("%Y%m", CURRENT_TIMESTAMP())
+          AND invoice.month = FORMAT_TIMESTAMP("%Y%m", CURRENT_TIMESTAMP(),
+                                               "{QUERY_TIME_ZONE}")
         GROUP BY
           project.id,
           currency
@@ -52,7 +54,7 @@ FROM
       `{BIGQUERY_BILLING_TABLE}`
     WHERE
       _PARTITIONTIME >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 2 DAY)
-      AND usage_start_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 1 DAY)
+      AND export_time > TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 1 DAY)
     GROUP BY
       project.id,
       currency
