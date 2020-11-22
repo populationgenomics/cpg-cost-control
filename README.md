@@ -120,7 +120,7 @@ SELECT
 FROM
   (
     SELECT
-      FORMAT_TIMESTAMP("%F", export_time) as day,
+      FORMAT_TIMESTAMP("%F", export_time, "$QUERY_TIME_ZONE") as day,
       service.description as service,
       sku.description as sku,
       ROUND(sum(cost), 2) as cost,
