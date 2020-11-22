@@ -116,29 +116,23 @@ following query can be helpful:
 
 ```sql
 SELECT
-  *
+   FORMAT_TIMESTAMP("%F", export_time, "$QUERY_TIME_ZONE") as day,
+   service.description as service,
+   sku.description as sku,
+   ROUND(sum(cost), 2) as cost,
+   currency
 FROM
-  (
-    SELECT
-      FORMAT_TIMESTAMP("%F", export_time) as day,
-      service.description as service,
-      sku.description as sku,
-      ROUND(sum(cost), 2) as cost,
-      currency
-    FROM
-      `$BIGQUERY_BILLING_TABLE`
-    WHERE
-      _PARTITIONTIME >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 8 DAY)
-      AND project.id = "$PROJECT"
-    GROUP BY
-      day,
-      service,
-      sku,
-      currency
-  )
+  `$BIGQUERY_BILLING_TABLE`
 WHERE
-  cost > 0.1
+   _PARTITIONTIME >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 8 DAY) 
+   AND project.id LIKE "$PROJECT"
+   AND cost > 0 
+GROUP BY
+   day,
+   service,
+   sku,
+   currency
 ORDER BY
-  day DESC,
-  cost DESC;
+   day DESC,
+   cost DESC
 ```
