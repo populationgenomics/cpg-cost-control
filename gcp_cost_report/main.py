@@ -55,6 +55,8 @@ FROM
     WHERE
       _PARTITIONTIME >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 2 DAY)
       AND export_time > TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 1 DAY)
+      AND invoice.month = FORMAT_TIMESTAMP("%Y%m", CURRENT_TIMESTAMP(),
+                                           "{QUERY_TIME_ZONE}")
     GROUP BY
       project.id,
       currency
