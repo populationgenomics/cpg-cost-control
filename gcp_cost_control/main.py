@@ -14,12 +14,14 @@ from slack.errors import SlackApiError
 PROJECT_ID = os.getenv('GCP_PROJECT')
 SLACK_CHANNEL = os.getenv('SLACK_CHANNEL')
 SLACK_TOKEN_SECRET_NAME = (
-    f'projects/{PROJECT_ID}/secrets/slack-gcp-cost-control/versions/latest')
+    f'projects/{PROJECT_ID}/secrets/slack-gcp-cost-control/versions/latest'
+)
 
 # Cache the Slack client.
 secret_manager = secretmanager.SecretManagerServiceClient()
 slack_token_response = secret_manager.access_secret_version(
-    request={"name": SLACK_TOKEN_SECRET_NAME})
+    request={'name': SLACK_TOKEN_SECRET_NAME}
+)
 slack_token = slack_token_response.payload.data.decode('UTF-8')
 slack_client = slack.WebClient(token=slack_token)
 
@@ -28,8 +30,9 @@ def gcp_cost_control(data, unused_context):
     """Main entry point for the Cloud Function."""
 
     pubsub_budget_notification_data = json.loads(
-        base64.b64decode(data['data']).decode('utf-8'))
-    logging.info('Received notification: %s', pubsub_budget_notification_data)
+        base64.b64decode(data['data']).decode('utf-8')
+    )
+    logging.info(f'Received notification: {pubsub_budget_notification_data}')
 
     budget = pubsub_budget_notification_data['budgetAmount']
     cost = pubsub_budget_notification_data['costAmount']
@@ -42,7 +45,7 @@ def gcp_cost_control(data, unused_context):
     budget_project_id = pubsub_budget_notification_data['budgetDisplayName']
 
     billing = discovery.build('cloudbilling', 'v1', cache_discovery=False)
-    projects = billing.projects()
+    projects = billing.projects()  # pylint: disable=no-member
 
     # If the billing is already disabled, there's nothing to do.
     if not is_billing_enabled(budget_project_id, projects):
@@ -55,7 +58,8 @@ def gcp_cost_control(data, unused_context):
     currency = pubsub_budget_notification_data['currencyCode']
     post_slack_message(
         f'*Warning:* disabled billing for GCP project "{budget_project_id}", '
-        f'which is over budget ({cost} {currency} > {budget} {currency}).')
+        f'which is over budget ({cost} {currency} > {budget} {currency}).'
+    )
 
 
 def is_billing_enabled(project_id, projects):
@@ -70,9 +74,11 @@ def is_billing_enabled(project_id, projects):
     except KeyError:
         # If billingEnabled isn't part of the return, billing is not enabled
         return False
-    except Exception:
-        logging.error('Unable to determine if billing is enabled on specified '
-                      'project, assuming billing is enabled')
+    except Exception:  # pylint: disable=broad-except
+        logging.error(
+            'Unable to determine if billing is enabled on specified '
+            'project, assuming billing is enabled'
+        )
         return True
 
 
@@ -84,11 +90,11 @@ def disable_billing_for_project(project_id, projects):
     body = {'billingAccountName': ''}  # Disable billing
     try:
         res = projects.updateBillingInfo(
-            name=f'projects/{project_id}', body=body).execute()
-        logging.error('Billing disabled: %s', json.dumps(res))
-    except Exception as exception:
-        logging.error('Failed to disable billing, possibly check permissions: '
-                      '%s', exception)
+            name=f'projects/{project_id}', body=body
+        ).execute()
+        logging.error(f'Billing disabled: {json.dumps(res)}')
+    except Exception as e:  # pylint: disable=broad-except
+        logging.error(f'Failed to disable billing, possibly check permissions: {e}')
 
 
 def post_slack_message(text):
@@ -100,7 +106,7 @@ def post_slack_message(text):
             json={
                 'channel': SLACK_CHANNEL,
                 'text': text,
-            }
+            },
         )
     except SlackApiError as err:
-        logging.error('Error posting to Slack: %s', err)
+        logging.error(f'Error posting to Slack: {err}')

@@ -38,7 +38,8 @@ notifications for _all_ projects.
    the _Secret Manager Secret Accessor_ role at the project level.
 1. Deploy the Cloud Function, replacing `$BILLING_ADMIN_PROJECT`, `$REGION`,
    `$SERVICE_ACCOUNT`, and `$SLACK_CHANNEL` accordingly:
-   ```
+
+   ```bash
    cd gcp_cost_control
    gcloud config set project $BILLING_ADMIN_PROJECT
    gcloud functions deploy gcp_cost_control --runtime python37 \
@@ -66,15 +67,15 @@ To test the full setup, you can publish the following Pub/Sub message to the
 down the whole project when billing gets disabled temporarily. If there are any
 issues, check the logs for the `gcp-cost-control` Cloud Function.
 
-```
+```json
 {
-    "budgetDisplayName": "$TEST_PROJECT",
-    "alertThresholdExceeded": 1.0,
-    "costAmount": 110.01,
-    "costIntervalStart": "2020-01-01T00:00:00Z",
-    "budgetAmount": 100.00,
-    "budgetAmountType": "SPECIFIED_AMOUNT",
-    "currencyCode": "USD"
+  "budgetDisplayName": "$TEST_PROJECT",
+  "alertThresholdExceeded": 1.0,
+  "costAmount": 110.01,
+  "costIntervalStart": "2020-01-01T00:00:00Z",
+  "budgetAmount": 100.0,
+  "budgetAmountType": "SPECIFIED_AMOUNT",
+  "currencyCode": "USD"
 }
 ```
 
@@ -97,7 +98,8 @@ daily per-project cost report in Slack.
 1. Install the Cloud Function that gets triggered when a message to the
    `cost-report` Pub/Sub topic is posted. Set `$QUERY_TIME_ZONE` to your local
    time zone, e.g. `Australia/Sydney`.
-   ```
+
+   ```bash
    cd gcp_cost_report
    gcloud config set project $BILLING_ADMIN_PROJECT
    gcloud functions deploy gcp_cost_report --runtime python37 \
