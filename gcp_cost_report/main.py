@@ -160,10 +160,7 @@ def gcp_cost_report(unused_data, unused_context):
 def get_percent_used_from_budget(b, last_month_total, currency):
     """Get percent_used as a string from GCP billing budget"""
     percent_used = ''
-    inner_amount = b.amount
-    if not inner_amount:
-        return None
-    inner_amount = b.specified_amount
+    inner_amount = b.amount.specified_amount
     if not inner_amount:
         return None
     budget_currency = inner_amount.currency_code
