@@ -120,12 +120,12 @@ def gcp_cost_report(unused_data, unused_context):
     for row in bigquery_client.query(BIGQUERY_QUERY):
         project_id = row['project_id']
         currency = row['currency']
-        last_month = row['month']
+        last_month = round(row['month'], 2)
         last_day = '-'
         percent_used = ''
 
         if row['day']:
-            last_day = row['day']
+            last_day = round(row['day'], 2)
             totals[currency]['day'] += row['day']
 
         if project_id in budgets_map:
@@ -155,7 +155,13 @@ def gcp_cost_report(unused_data, unused_context):
         if len(all_rows) > 1:
 
             # flatten from (List[Tuple[str, str]] -> List[Dict])
-            body = [{'type': 'mrkdwn', 'text': a} for row in all_rows for a in row]
+            def wrap_in_mrkdwn(a):
+                return {'type': 'mrkdwn', 'text': a}
+
+            body = [
+                wrap_in_mrkdwn('\n'.join(a[0] for a in all_rows)),
+                wrap_in_mrkdwn('\n'.join(a[1] for a in all_rows)),
+            ]
             blocks = {'type': 'section', 'fields': body}
             post_slack_message(blocks=blocks)
 
@@ -174,7 +180,7 @@ def get_percent_used_from_budget(b, last_month_total, currency):
     monthly_used_float = try_cast_float(last_month_total)
 
     if budget_total and monthly_used_float:
-        percent_used = f'{monthly_used_float / budget_total * 100}%'
+        percent_used = f'{round(monthly_used_float / budget_total * 100)}%'
         if budget_currency != currency:
             # there's a currency mismatch
             percent_used += (
