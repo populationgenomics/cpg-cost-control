@@ -85,6 +85,7 @@ budget_client = budget.BudgetServiceClient()
 
 
 def try_cast_int(i):
+    """Cast i to int, else return None if ValueError"""
     try:
         return int(i)
     except ValueError:
@@ -92,6 +93,7 @@ def try_cast_int(i):
 
 
 def try_cast_float(f):
+    """Cast i to float, else return None if ValueError"""
     try:
         return float(f)
     except ValueError:
@@ -104,7 +106,7 @@ def gcp_cost_report(unused_data, unused_context):
     totals = defaultdict(lambda: defaultdict(float))
     # TODO: get budgets here
     budgets = budget_client.list_budgets(parent=f'billingAccounts/{BILLING_ACCOUNT_ID}')
-    budgets_map = {b['displayName']: b for b in budgets}
+    budgets_map = {b.displayName: b for b in budgets}
     join_fields = (
         lambda fields, currency: ' / '.join(a for a in fields if a is not None)
         + f' ({currency})'
@@ -158,12 +160,17 @@ def gcp_cost_report(unused_data, unused_context):
 def get_percent_used_from_budget(b, last_month_total, currency):
     """Get percent_used as a string from GCP billing budget"""
     percent_used = ''
-    inner_amount = b.get('amount', {}).get('specifiedAmount', {})
-    budget_currency = inner_amount.get('currencyCode', currency)
+    inner_amount = b.amount
+    if not inner_amount:
+        return None
+    inner_amount = b.specifiedAmount
+    if not inner_amount:
+        return None
+    budget_currency = inner_amount.currencyCode
 
     # 'units' is an int64, which is represented as a string in JSON,
     # this can be safely stored in Python3: https://stackoverflow.com/a/46699498
-    budget_total = try_cast_int(inner_amount.get('units'))
+    budget_total = try_cast_int(inner_amount.units)
     monthly_used_float = try_cast_float(last_month_total)
 
     if budget_total and monthly_used_float:
