@@ -106,7 +106,7 @@ def gcp_cost_report(unused_data, unused_context):
     totals = defaultdict(lambda: defaultdict(float))
     # TODO: get budgets here
     budgets = budget_client.list_budgets(parent=f'billingAccounts/{BILLING_ACCOUNT_ID}')
-    budgets_map = {b.displayName: b for b in budgets}
+    budgets_map = {b.display_name: b for b in budgets}
     join_fields = (
         lambda fields, currency: ' / '.join(a for a in fields if a is not None)
         + f' ({currency})'
@@ -163,10 +163,10 @@ def get_percent_used_from_budget(b, last_month_total, currency):
     inner_amount = b.amount
     if not inner_amount:
         return None
-    inner_amount = b.specifiedAmount
+    inner_amount = b.specified_amount
     if not inner_amount:
         return None
-    budget_currency = inner_amount.currencyCode
+    budget_currency = inner_amount.currency_code
 
     # 'units' is an int64, which is represented as a string in JSON,
     # this can be safely stored in Python3: https://stackoverflow.com/a/46699498
