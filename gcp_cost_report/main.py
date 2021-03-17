@@ -152,9 +152,13 @@ def gcp_cost_report(unused_data, unused_context):
 
         all_rows = [summary_header, *totals_summary, *project_summary]
         if len(all_rows) > 1:
+
             # flatten from (List[Tuple[str, str]] -> List[Dict])
             body = [{'type': 'mrkdwn', 'text': a} for row in all_rows for a in row]
-            post_slack_message(blocks={'type': 'section', 'fields': body})
+            print('Printing blocks: ')
+            blocks = {'type': 'section', 'fields': body}
+            print(blocks)
+            post_slack_message(blocks=blocks)
 
 
 def get_percent_used_from_budget(b, last_month_total, currency):
