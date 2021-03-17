@@ -90,6 +90,8 @@ daily per-project cost report in Slack.
    `billing-admin-123456.billing.gcp_billing_export_v1_012345_ABCDEF_123456`.
 1. Grant the service account _BigQuery Job User_ and _BigQuery Data Viewer_ role
    permissions.
+1. At the organization level, grant the service account _Billing Viewer_ permissions.
+   Replace `$BILLING_ACCOUNT_ID` below with your billing ID, e.g. `01D123-234567-CBDEFA`.
 1. Create a new Pub/Sub topic in the `billing-admin` project, named
    `cost-report`.
 1. Create a Cloud Scheduler job that posts a Pub/Sub message to the
@@ -108,7 +110,8 @@ daily per-project cost report in Slack.
      --service-account $SERVICE_ACCOUNT \
      --set-env-vars SLACK_CHANNEL=$SLACK_CHANNEL \
      --set-env-vars BIGQUERY_BILLING_TABLE=$BIGQUERY_BILLING_TABLE \
-     --set-env-vars QUERY_TIME_ZONE=$QUERY_TIME_ZONE
+     --set-env-vars QUERY_TIME_ZONE=$QUERY_TIME_ZONE \
+     --set-env-vars BILLING_ACCOUNT_ID=$BILLING_ACCOUNT_ID
    ```
 
 ## Individiual billing items

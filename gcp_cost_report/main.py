@@ -3,7 +3,7 @@
 import logging
 import os
 from collections import defaultdict
-from typing import Tuple, List, Dict
+from typing import Tuple, List
 
 from google.cloud import bigquery
 from google.cloud import secretmanager
@@ -70,9 +70,7 @@ SLACK_CHANNEL = os.getenv('SLACK_CHANNEL')
 SLACK_TOKEN_SECRET_NAME = (
     f'projects/{PROJECT_ID}/secrets/slack-gcp-cost-control/versions/latest'
 )
-BUDGET_PARENT_SECRET_NAME = (
-    f'projects/{PROJECT_ID}/secrets/gcp-cost-control-budget-parent/versions/latest'
-)
+BILLING_ACCOUNT_ID = os.getenv('BILLING_ACCOUNT_ID')
 
 # Cache the Slack client.
 secret_manager = secretmanager.SecretManagerServiceClient()
@@ -84,9 +82,6 @@ slack_client = slack.WebClient(token=slack_token)
 
 bigquery_client = bigquery.Client()
 budget_client = budget.BudgetServiceClient()
-budget_parent = secret_manager.access_secret_version(
-    request={'name': BUDGET_PARENT_SECRET_NAME}
-).payload.data.decode('UTF-8')
 
 
 def try_cast_int(i):
@@ -108,7 +103,7 @@ def gcp_cost_report(unused_data, unused_context):
 
     totals = defaultdict(lambda: defaultdict(float))
     # TODO: get budgets here
-    budgets = budget_client.list_budgets(parent=budget_parent)
+    budgets = budget_client.list_budgets(parent=f'billingAccounts/{BILLING_ACCOUNT_ID}')
     budgets_map = {b['displayName']: b for b in budgets}
     join_fields = (
         lambda fields, currency: ' / '.join(a for a in fields if a is not None)
@@ -161,8 +156,8 @@ def gcp_cost_report(unused_data, unused_context):
 
 
 def get_percent_used_from_budget(b, last_month_total, currency):
-    """Get percent_used as a string from GCP billing Budget"""
-    percent_used = ""
+    """Get percent_used as a string from GCP billing budget"""
+    percent_used = ''
     inner_amount = b.get('amount', {}).get('specifiedAmount', {})
     budget_currency = inner_amount.get('currencyCode', currency)
 
