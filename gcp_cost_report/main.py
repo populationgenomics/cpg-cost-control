@@ -131,8 +131,11 @@ def gcp_cost_report(unused_data, unused_context):
             totals[currency]['day'] += row['day']
 
         if project_id in budgets_map:
-            budget = budgets_map[project_id]
-            percent_used = get_percent_used_from_budget(budget, last_month, currency)
+            percent_used = get_percent_used_from_budget(
+                budgets_map[project_id],
+                last_month,
+                currency,
+            )
 
         project_summary.append(
             (project_id, join_fields([last_day, last_month, percent_used], currency))
@@ -157,9 +160,10 @@ def gcp_cost_report(unused_data, unused_context):
             post_slack_message(blocks={'type': 'section', 'fields': body})
 
 
-def get_percent_used_from_budget(budget, last_month_total, currency):
+def get_percent_used_from_budget(b, last_month_total, currency):
+    """Get percent_used as a string from GCP billing Budget"""
     percent_used = ""
-    inner_amount = budget.get('amount', {}).get('specifiedAmount', {})
+    inner_amount = b.get('amount', {}).get('specifiedAmount', {})
     budget_currency = inner_amount.get('currencyCode', currency)
 
     # 'units' is an int64, which is represented as a string in JSON,
