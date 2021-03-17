@@ -108,7 +108,7 @@ def gcp_cost_report(unused_data, unused_context):
     budgets = budget_client.list_budgets(parent=f'billingAccounts/{BILLING_ACCOUNT_ID}')
     budgets_map = {b.display_name: b for b in budgets}
     join_fields = (
-        lambda fields, currency: ' / '.join(a for a in fields if a is not None)
+        lambda fields, currency: ' / '.join(str(a) for a in fields if a is not None)
         + f' ({currency})'
     )
 
