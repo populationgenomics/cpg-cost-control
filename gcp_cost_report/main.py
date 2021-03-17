@@ -1,5 +1,6 @@
 """A Cloud Function to send a daily GCP cost report to Slack."""
 
+import json
 import logging
 import os
 from collections import defaultdict
@@ -155,9 +156,7 @@ def gcp_cost_report(unused_data, unused_context):
 
             # flatten from (List[Tuple[str, str]] -> List[Dict])
             body = [{'type': 'mrkdwn', 'text': a} for row in all_rows for a in row]
-            print('Printing blocks: ')
             blocks = {'type': 'section', 'fields': body}
-            print(blocks)
             post_slack_message(blocks=blocks)
 
 
@@ -189,7 +188,7 @@ def get_percent_used_from_budget(b, last_month_total, currency):
     return percent_used
 
 
-def post_slack_message(blocks=None):
+def post_slack_message(blocks):
     """Posts the given text as message to Slack."""
 
     try:
@@ -197,7 +196,7 @@ def post_slack_message(blocks=None):
             'chat.postMessage',
             json={
                 'channel': SLACK_CHANNEL,
-                'blocks': blocks,
+                'blocks': json.dumps(blocks),
             },
         )
     except SlackApiError as err:
