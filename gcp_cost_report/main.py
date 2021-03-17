@@ -1,6 +1,6 @@
 """A Cloud Function to send a daily GCP cost report to Slack."""
 
-import json
+# import json
 import logging
 import os
 from collections import defaultdict
@@ -12,6 +12,8 @@ import google.cloud.billing.budgets_v1.services.budget_service as budget
 
 import slack
 from slack.errors import SlackApiError
+
+import tabulate
 
 PROJECT_ID = os.getenv('GCP_PROJECT')
 BIGQUERY_BILLING_TABLE = os.getenv('BIGQUERY_BILLING_TABLE')
@@ -154,16 +156,15 @@ def gcp_cost_report(unused_data, unused_context):
         all_rows = [summary_header, *totals_summary, *project_summary]
         if len(all_rows) > 1:
 
-            # flatten from (List[Tuple[str, str]] -> List[Dict])
-            def wrap_in_mrkdwn(a):
-                return {'type': 'mrkdwn', 'text': a}
-
-            body = [
-                wrap_in_mrkdwn('\n'.join(a[0] for a in all_rows)),
-                wrap_in_mrkdwn('\n'.join(a[1] for a in all_rows)),
-            ]
-            blocks = {'type': 'section', 'fields': body}
-            post_slack_message(blocks=blocks)
+            # def wrap_in_mrkdwn(a):
+            #     return {'type': 'mrkdwn', 'text': a}
+            # body = [
+            #     wrap_in_mrkdwn('\n'.join(a[0] for a in all_rows)),
+            #     wrap_in_mrkdwn('\n'.join(a[1] for a in all_rows)),
+            # ]
+            # blocks = {'type': 'section', 'fields': body}
+            body = tabulate.tabulate(all_rows)
+            post_slack_message(text=f'```\n{body}\n```')
 
 
 def get_percent_used_from_budget(b, last_month_total, currency):
@@ -194,16 +195,14 @@ def get_percent_used_from_budget(b, last_month_total, currency):
     return percent_used
 
 
-def post_slack_message(blocks):
+def post_slack_message(text):
     """Posts the given text as message to Slack."""
-    blocks_str = json.dumps(blocks)
-    print(f'Slack blocks: {blocks_str}')
     try:
         slack_client.api_call(  # pylint: disable=duplicate-code
             'chat.postMessage',
             json={
                 'channel': SLACK_CHANNEL,
-                'blocks': blocks_str,
+                'text': text,
             },
         )
     except SlackApiError as err:
