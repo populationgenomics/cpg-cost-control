@@ -190,13 +190,14 @@ def get_percent_used_from_budget(b, last_month_total, currency):
 
 def post_slack_message(blocks):
     """Posts the given text as message to Slack."""
-
+    blocks_str = json.dumps(blocks)
+    print(f'Slack blocks: {blocks_str}')
     try:
         slack_client.api_call(  # pylint: disable=duplicate-code
             'chat.postMessage',
             json={
                 'channel': SLACK_CHANNEL,
-                'blocks': json.dumps(blocks),
+                'blocks': blocks_str,
             },
         )
     except SlackApiError as err:
