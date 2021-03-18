@@ -107,7 +107,6 @@ def gcp_cost_report(unused_data, unused_context):
     """Main entry point for the Cloud Function."""
 
     totals = defaultdict(lambda: defaultdict(float))
-    # TODO: get budgets here
     budgets = budget_client.list_budgets(parent=f'billingAccounts/{BILLING_ACCOUNT_ID}')
     budgets_map = {b.display_name: b for b in budgets}
 
