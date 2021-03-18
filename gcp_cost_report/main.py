@@ -137,6 +137,11 @@ def gcp_cost_report(unused_data, unused_context):
                 last_month,
                 currency,
             )
+        else:
+            logging.warning(
+                f"Couldn't find project_id {project_id} in "
+                f"budgets: {', '.join(budgets_map.keys())}"
+            )
 
         fields = join_fields([last_day, last_month, percent_used_str], currency)
 
@@ -181,7 +186,7 @@ def get_percent_used_from_budget(b, last_month_total, currency) -> Tuple[float, 
     percent_used_str = ''
     inner_amount = b.amount.specified_amount
     if not inner_amount:
-        return None
+        return None, ''
     budget_currency = inner_amount.currency_code
 
     # 'units' is an int64, which is represented as a string in JSON,
@@ -200,7 +205,11 @@ def get_percent_used_from_budget(b, last_month_total, currency) -> Tuple[float, 
 
     else:
         # TODO: log warning here that something unexpected is going on with the data
-        pass
+        logging.warning(
+            "Couldn't determine the budget amount from the budget, "
+            f'inner_amount.units: {inner_amount.units}, '
+            f'monthly_used_float: {monthly_used_float}'
+        )
 
     return percent_used, percent_used_str
 
