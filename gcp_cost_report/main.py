@@ -110,8 +110,8 @@ def gcp_cost_report(unused_data, unused_context):
     budgets = budget_client.list_budgets(parent=f'billingAccounts/{BILLING_ACCOUNT_ID}')
     budgets_map = {b.display_name: b for b in budgets}
 
-    def add_currency_to_non_null_els(fields, currency, separator=' | '):
-        return separator.join(f'{el} {currency}' for el in fields if el is not None)
+    def add_currency_to_non_null_fields(fields, currency, separator=' | '):
+        return separator.join(f'{field} {currency}' for field in fields if field is not None)
 
     summary_header = ('Project', '24h | month (% used)')
     project_summary: List[Tuple[str, str]] = []
@@ -146,7 +146,7 @@ def gcp_cost_report(unused_data, unused_context):
                 f"budgets: {', '.join(budgets_map.keys())}"
             )
 
-        # potential formating
+        # potential formatting
         if percent_used is not None:
             if percent_used >= 0.8:
                 # make fields bold
