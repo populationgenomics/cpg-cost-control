@@ -1,6 +1,7 @@
 """A Cloud Function to send a daily GCP cost report to Slack."""
 
 # import json
+import json
 import logging
 import os
 from collections import defaultdict
@@ -13,7 +14,6 @@ import google.cloud.billing.budgets_v1.services.budget_service as budget
 import slack
 from slack.errors import SlackApiError
 
-import tabulate
 
 PROJECT_ID = os.getenv('GCP_PROJECT')
 BIGQUERY_BILLING_TABLE = os.getenv('BIGQUERY_BILLING_TABLE')
@@ -122,33 +122,41 @@ def gcp_cost_report(unused_data, unused_context):
     for row in bigquery_client.query(BIGQUERY_QUERY):
         project_id = row['project_id']
         currency = row['currency']
-        last_month = round(row['month'], 2)
+        last_month = f'${round(row["month"], 2)}'
         last_day = '-'
-        percent_used = ''
+        percent_used_str = ''
+        percent_used = None
 
         if row['day']:
-            last_day = round(row['day'], 2)
+            last_day = f'${round(row["day"], 2)}'
             totals[currency]['day'] += row['day']
 
         if project_id in budgets_map:
-            percent_used = get_percent_used_from_budget(
+            percent_used, percent_used_str = get_percent_used_from_budget(
                 budgets_map[project_id],
                 last_month,
                 currency,
             )
 
-        project_summary.append(
-            (project_id, join_fields([last_day, last_month, percent_used], currency))
-        )
+        fields = join_fields([last_day, last_month, percent_used_str], currency)
+
+        # potential formating
+        if percent_used is not None:
+            if percent_used >= 0.8:
+                # make fields bold
+                project_id = f'*{project_id}*'
+                fields = f'*{fields}*'
+
+        project_summary.append((project_id, fields))
 
     for currency, vals in totals.items():
-        last_day = round(vals['day'], 2)
-        last_month = round(vals['month'], 2)
+        last_day = f'${round(vals["day"], 2)}'
+        last_month = f'${round(vals["month"], 2)}'
 
         # totals don't have percent used
         totals_summary.append(
             (
-                '_*All projects:*_',
+                '_All projects:_',
                 join_fields([last_day, last_month], currency),
             )
         )
@@ -156,20 +164,21 @@ def gcp_cost_report(unused_data, unused_context):
         all_rows = [summary_header, *totals_summary, *project_summary]
         if len(all_rows) > 1:
 
-            # def wrap_in_mrkdwn(a):
-            #     return {'type': 'mrkdwn', 'text': a}
-            # body = [
-            #     wrap_in_mrkdwn('\n'.join(a[0] for a in all_rows)),
-            #     wrap_in_mrkdwn('\n'.join(a[1] for a in all_rows)),
-            # ]
-            # blocks = {'type': 'section', 'fields': body}
-            body = tabulate.tabulate(all_rows)
-            post_slack_message(text=f'```\n{body}\n```')
+            def wrap_in_mrkdwn(a):
+                return {'type': 'mrkdwn', 'text': a}
+
+            body = [
+                wrap_in_mrkdwn('\n'.join(a[0] for a in all_rows)),
+                wrap_in_mrkdwn('\n'.join(a[1] for a in all_rows)),
+            ]
+            blocks = [{'type': 'section', 'fields': body}]
+            post_slack_message(blocks=blocks)
 
 
-def get_percent_used_from_budget(b, last_month_total, currency):
+def get_percent_used_from_budget(b, last_month_total, currency) -> Tuple[float, str]:
     """Get percent_used as a string from GCP billing budget"""
-    percent_used = ''
+    percent_used = None
+    percent_used_str = ''
     inner_amount = b.amount.specified_amount
     if not inner_amount:
         return None
@@ -181,10 +190,11 @@ def get_percent_used_from_budget(b, last_month_total, currency):
     monthly_used_float = try_cast_float(last_month_total)
 
     if budget_total and monthly_used_float:
-        percent_used = f'{round(monthly_used_float / budget_total * 100)}%'
+        percent_used = monthly_used_float / budget_total
+        percent_used_str = f'{round(percent_used * 100)}%'
         if budget_currency != currency:
             # there's a currency mismatch
-            percent_used += (
+            percent_used_str += (
                 f' (mismatch currency, budget: {budget_currency} | total: {currency})'
             )
 
@@ -192,17 +202,17 @@ def get_percent_used_from_budget(b, last_month_total, currency):
         # TODO: log warning here that something unexpected is going on with the data
         pass
 
-    return percent_used
+    return percent_used, percent_used_str
 
 
-def post_slack_message(text):
+def post_slack_message(blocks):
     """Posts the given text as message to Slack."""
     try:
         slack_client.api_call(  # pylint: disable=duplicate-code
             'chat.postMessage',
             json={
                 'channel': SLACK_CHANNEL,
-                'text': text,
+                'blocks': json.dumps(blocks),
             },
         )
     except SlackApiError as err:
