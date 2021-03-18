@@ -110,12 +110,11 @@ def gcp_cost_report(unused_data, unused_context):
     # TODO: get budgets here
     budgets = budget_client.list_budgets(parent=f'billingAccounts/{BILLING_ACCOUNT_ID}')
     budgets_map = {b.display_name: b for b in budgets}
-    join_fields = (
-        lambda fields, currency: ' / '.join(str(a) for a in fields if a is not None)
-        + f' ({currency})'
-    )
 
-    summary_header = ('Project', '24h / month / % used')
+    def add_currency_to_non_null_els(fields, currency, separator=' | '):
+        return separator.join(f'{el} {currency}' for el in fields if el is not None)
+
+    summary_header = ('Project', '24h | month (% used)')
     project_summary: List[Tuple[str, str]] = []
     totals_summary: List[Tuple[str, str]] = []
 
@@ -124,12 +123,13 @@ def gcp_cost_report(unused_data, unused_context):
         currency = row['currency']
         last_month = round(row['month'], 2)
         last_day = None
-        percent_used_str = ''
         percent_used = None
 
         if row['day']:
             last_day = round(row['day'], 2)
             totals[currency]['day'] += row['day']
+
+        row_str = add_currency_to_non_null_els([last_day, last_month], currency)
 
         if project_id in budgets_map:
             percent_used, percent_used_str = get_percent_used_from_budget(
@@ -137,24 +137,23 @@ def gcp_cost_report(unused_data, unused_context):
                 last_month,
                 currency,
             )
+            if percent_used_str:
+                row_str += f' ({percent_used_str})'
+
         else:
             logging.warning(
                 f"Couldn't find project_id {project_id} in "
                 f"budgets: {', '.join(budgets_map.keys())}"
             )
 
-        last_day_str = f'${last_day}' if last_day else '-'
-        last_month_str = f'${last_month}'
-        fields = join_fields([last_day_str, last_month_str, percent_used_str], currency)
-
         # potential formating
         if percent_used is not None:
             if percent_used >= 0.8:
                 # make fields bold
                 project_id = f'*{project_id}*'
-                fields = f'*{fields}*'
+                row_str = f'*{row_str}*'
 
-        project_summary.append((project_id, fields))
+        project_summary.append((project_id, row_str))
 
     for currency, vals in totals.items():
         last_day = f'${round(vals["day"], 2)}'
@@ -164,7 +163,7 @@ def gcp_cost_report(unused_data, unused_context):
         totals_summary.append(
             (
                 '_All projects:_',
-                join_fields([last_day, last_month], currency),
+                add_currency_to_non_null_els([last_day, last_month], currency),
             )
         )
 
