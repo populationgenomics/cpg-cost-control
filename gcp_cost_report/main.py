@@ -129,7 +129,7 @@ def gcp_cost_report(unused_data, unused_context):
             last_day_str = f'{row["day"]:.2f}'
             totals[currency]['day'] += row['day']
 
-        row_str = add_currency_to_non_null_els([last_day_str, last_month_str], currency)
+        row_str = add_currency_to_non_null_fields([last_day_str, last_month_str], currency)
 
         if project_id in budgets_map:
             percent_used, percent_used_str = get_percent_used_from_budget(
@@ -163,7 +163,7 @@ def gcp_cost_report(unused_data, unused_context):
         totals_summary.append(
             (
                 '_All projects:_',
-                add_currency_to_non_null_els([last_day_str, last_month], currency),
+                add_currency_to_non_null_fields([last_day_str, last_month], currency),
             )
         )
 
