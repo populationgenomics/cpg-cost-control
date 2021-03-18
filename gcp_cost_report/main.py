@@ -121,15 +121,16 @@ def gcp_cost_report(unused_data, unused_context):
     for row in bigquery_client.query(BIGQUERY_QUERY):
         project_id = row['project_id']
         currency = row['currency']
-        last_month = round(row['month'], 2)
-        last_day = None
+        last_month = row['month']
+        last_month_str = f'{last_month:.2f}'
+        last_day_str = None
         percent_used = None
 
         if row['day']:
-            last_day = round(row['day'], 2)
+            last_day_str = f'{row["day"]:.2f}'
             totals[currency]['day'] += row['day']
 
-        row_str = add_currency_to_non_null_els([last_day, last_month], currency)
+        row_str = add_currency_to_non_null_els([last_day_str, last_month_str], currency)
 
         if project_id in budgets_map:
             percent_used, percent_used_str = get_percent_used_from_budget(
@@ -156,14 +157,14 @@ def gcp_cost_report(unused_data, unused_context):
         project_summary.append((project_id, row_str))
 
     for currency, vals in totals.items():
-        last_day = f'${round(vals["day"], 2)}'
-        last_month = f'${round(vals["month"], 2)}'
+        last_day_str = f'{vals["day"]:.2f}'
+        last_month_str = f'{vals["month"]:.2f}'
 
         # totals don't have percent used
         totals_summary.append(
             (
                 '_All projects:_',
-                add_currency_to_non_null_els([last_day, last_month], currency),
+                add_currency_to_non_null_els([last_day_str, last_month], currency),
             )
         )
 
