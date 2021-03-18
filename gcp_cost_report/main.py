@@ -111,7 +111,9 @@ def gcp_cost_report(unused_data, unused_context):
     budgets_map = {b.display_name: b for b in budgets}
 
     def add_currency_to_non_null_fields(fields, currency, separator=' | '):
-        return separator.join(f'{field} {currency}' for field in fields if field is not None)
+        return separator.join(
+            f'{field} {currency}' for field in fields if field is not None
+        )
 
     summary_header = ('Project', '24h | month (% used)')
     project_summary: List[Tuple[str, str]] = []
@@ -125,11 +127,15 @@ def gcp_cost_report(unused_data, unused_context):
         last_day_str = None
         percent_used = None
 
+        totals[row['currency']]['month'] += row['month']
+
         if row['day']:
             last_day_str = f'{row["day"]:.2f}'
             totals[currency]['day'] += row['day']
 
-        row_str = add_currency_to_non_null_fields([last_day_str, last_month_str], currency)
+        row_str = add_currency_to_non_null_fields(
+            [last_day_str, last_month_str], currency
+        )
 
         if project_id in budgets_map:
             percent_used, percent_used_str = get_percent_used_from_budget(
@@ -163,7 +169,9 @@ def gcp_cost_report(unused_data, unused_context):
         totals_summary.append(
             (
                 '_All projects:_',
-                add_currency_to_non_null_fields([last_day_str, last_month], currency),
+                add_currency_to_non_null_fields(
+                    [last_day_str, last_month_str], currency
+                ),
             )
         )
 
