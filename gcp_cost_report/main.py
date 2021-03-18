@@ -122,13 +122,13 @@ def gcp_cost_report(unused_data, unused_context):
     for row in bigquery_client.query(BIGQUERY_QUERY):
         project_id = row['project_id']
         currency = row['currency']
-        last_month = f'${round(row["month"], 2)}'
-        last_day = '-'
+        last_month = round(row['month'], 2)
+        last_day = None
         percent_used_str = ''
         percent_used = None
 
         if row['day']:
-            last_day = f'${round(row["day"], 2)}'
+            last_day = round(row['day'], 2)
             totals[currency]['day'] += row['day']
 
         if project_id in budgets_map:
@@ -143,7 +143,9 @@ def gcp_cost_report(unused_data, unused_context):
                 f"budgets: {', '.join(budgets_map.keys())}"
             )
 
-        fields = join_fields([last_day, last_month, percent_used_str], currency)
+        last_day_str = f'${last_day}' if last_day else '-'
+        last_month_str = f'${last_month}'
+        fields = join_fields([last_day_str, last_month_str, percent_used_str], currency)
 
         # potential formating
         if percent_used is not None:
