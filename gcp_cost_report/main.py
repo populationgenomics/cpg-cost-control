@@ -120,7 +120,7 @@ def gcp_cost_report(unused_data, unused_context):
     totals_summary: List[Tuple[str, str]] = []
 
     for row in bigquery_client.query(BIGQUERY_QUERY):
-        project_id = row['project_id']
+        project_id = row['project_id'] or '<none>'
         currency = row['currency']
         last_month = row['month']
         last_month_str = f'{last_month:.2f}'
