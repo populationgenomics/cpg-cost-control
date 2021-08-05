@@ -192,7 +192,7 @@ def gcp_cost_report(unused_data, unused_context):
                 <https://datastudio.google.com/reporting/9f134c96-b86c-4a05-9685-4df2438537a4 | GCP Cost Dashboard>",
             }
 
-            blocks = [{'type': 'section', "text": dashboard_message, 'fields': body}]
+            blocks = [{'type': 'section', 'text': dashboard_message, 'fields': body}]
             post_slack_message(blocks=blocks)
 
 
