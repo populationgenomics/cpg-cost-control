@@ -185,7 +185,14 @@ def gcp_cost_report(unused_data, unused_context):
                 wrap_in_mrkdwn('\n'.join(a[0] for a in all_rows)),
                 wrap_in_mrkdwn('\n'.join(a[1] for a in all_rows)),
             ]
-            blocks = [{'type': 'section', 'fields': body}]
+
+            dashboard_message = {
+                'type': 'mrkdwn',
+                'text': 'For further details, visit our \
+                <https://datastudio.google.com/reporting/9f134c96-b86c-4a05-9685-4df2438537a4 | GCP Cost Dashboard>',
+            }
+
+            blocks = [{'type': 'section', 'text': dashboard_message, 'fields': body}]
             post_slack_message(blocks=blocks)
 
 
