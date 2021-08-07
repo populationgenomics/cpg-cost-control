@@ -190,7 +190,7 @@ def gcp_cost_report(unused_data, unused_context):
                 'type': 'mrkdwn',
                 'text': (
                     'For further details, visit our <https://datastudio.google.com/'
-                    'reporting/9f134c96-b86c-4a05-9685-4df2438537a4 | cost dashboard>'
+                    'reporting/9f134c96-b86c-4a05-9685-4df2438537a4 | cost dashboard>.'
                 ),
             }
 
