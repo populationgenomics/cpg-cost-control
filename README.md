@@ -16,7 +16,7 @@ notifications for _all_ projects.
 
 ## Set up the Cloud Function
 
-1. Create a GCP project named `billing-admin`.
+1. Create a GCP project named for billing administration, e.g. called `billing-admin-290403` below.
 1. Enable the
    [Cloud Billing API](https://console.developers.google.com/apis/library/cloudbilling.googleapis.com)
    for the project.
@@ -31,7 +31,7 @@ notifications for _all_ projects.
    token and install the app on your Slack workspace.
 1. Invite the bot to the channel that you want to receive messages on:
    `/invite @gcp-cost-control`
-1. Back in the `billing-admin` GCP project, store the bot user OAuth access
+1. Back in the `billing-admin-290403` GCP project, store the bot user OAuth access
    token in the Secret Manager as a secret using the name
    `slack-gcp-cost-control`.
 1. Grant the previously created service account access to the secret by granting
@@ -51,18 +51,21 @@ notifications for _all_ projects.
 
 ## Add billing budgets
 
-Create a separate budget for each project that you'd like to cap billing for.
+Create a separate budget for each project that you'd like to cap billing for:
 
-- It's important to **set the budget name to the project ID** (not the project
-  name). That's how the Cloud Function can determine which project a
-  notification corresponds to.
-- Connect the budget to the shared Pub/Sub `budget-notifications` topic of the
-  `billing-admin` project.
+1. Go to "Billing".
+1. Go to "Budgets & Alerts".
+1. Click "Create Budget".
+1. Set the name of the budget identical to the _project ID_ (not the project name!) of your project.
+1. Select your new project from the drop-down "Projects".
+1. In the "Amount" section, set a non-zero target amount.
+1. In the "Actions" section, select "Connect a Pub/Sub topic to this budget". In the dropdown menu, select the topic `projects/billing-admin-290403/topics/budget-notifications`. If you can't see the topic, click on "Switch project" in that dropdown menu and select `billing-admin-290403`, and you should be able to see the topic.
+1. Click Finish.
 
 ## Testing
 
 To test the full setup, you can publish the following Pub/Sub message to the
-`budget-notifications` topic in the `billing-admin` project, replacing
+`budget-notifications` topic in the `billing-admin-290403` project, replacing
 `$TEST_PROJECT` accordingly. However, make sure that it's not a problem to shut
 down the whole project when billing gets disabled temporarily. If there are any
 issues, check the logs for the `gcp-cost-control` Cloud Function.
@@ -85,14 +88,14 @@ The [gcp_cost_report](gcp_cost_report.py) Cloud Function can be used to get a
 daily per-project cost report in Slack.
 
 1. Set up [Cloud Billing data export to BigQuery](https://cloud.google.com/billing/docs/how-to/export-data-bigquery)
-   in the `billing-admin` project. Replace `$BIGQUERY_BILLING_TABLE` below
+   in the `billing-admin-290403` project. Replace `$BIGQUERY_BILLING_TABLE` below
    with the corresponding table name, e.g.
-   `billing-admin-123456.billing.gcp_billing_export_v1_012345_ABCDEF_123456`.
+   `billing-admin-290403.billing.gcp_billing_export_v1_012345_ABCDEF_123456`.
 1. Grant the service account _BigQuery Job User_ and _BigQuery Data Viewer_ role
    permissions.
 1. At the organization level, grant the service account _Billing Viewer_ permissions.
    Replace `$BILLING_ACCOUNT_ID` below with your billing ID, e.g. `01D123-234567-CBDEFA`.
-1. Create a new Pub/Sub topic in the `billing-admin` project, named
+1. Create a new Pub/Sub topic in the `billing-admin-290403` project, named
    `cost-report`.
 1. Create a Cloud Scheduler job that posts a Pub/Sub message to the
    `cost-report` topic, e.g. using a daily schedule like `0 9 * * *`.
