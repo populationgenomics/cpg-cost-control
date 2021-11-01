@@ -161,6 +161,10 @@ def gcp_cost_report(unused_data, unused_context):
 
         project_summary.append((project_id, row_str))
 
+    if len(totals) == 0:
+        logging.info("No information to log, this function won't log anything to slack.")
+        return
+        
     for currency, vals in totals.items():
         last_day_str = f'{vals["day"]:.2f}'
         last_month_str = f'{vals["month"]:.2f}'
