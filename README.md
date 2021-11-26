@@ -84,7 +84,7 @@ issues, check the logs for the `gcp-cost-control` Cloud Function.
 
 ## Daily cost reports
 
-The [gcp_cost_report](gcp_cost_report.py) Cloud Function can be used to get a
+The [gcp_cost_report](gcp_cost_report/main.py) Cloud Function can be used to get a
 daily per-project cost report in Slack.
 
 1. Set up [Cloud Billing data export to BigQuery](https://cloud.google.com/billing/docs/how-to/export-data-bigquery)
