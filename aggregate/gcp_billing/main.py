@@ -13,7 +13,10 @@ Tasks:
 """
 
 import json
-
+import hashlib
+from pathlib import Path
+import pandas as pd
+from typing import Tuple
 from google.cloud import bigquery
 
 from cpg_utils.cloud import read_secret
@@ -33,7 +36,7 @@ def main():
 
     # Get the dataset to GCP project map
     dataset_to_gcp_map = get_dataset_to_gcp_map()
-    allowed_project_ids = "'" + "','".join(dataset_to_gcp_map.values()) + "'"
+    allowed_project_ids = "'" + "','".join(dataset_to_gcp_map.keys()) + "'"
 
     # Get the billing date in the time period
     # Filter out any rows that aren't in the allowed project ids
@@ -45,30 +48,70 @@ def main():
     """
 
     migrate_rows = bigquery_client.query(_query).result().to_dataframe()
-    migrate_rows['id'] = migrate_rows.apply(billing_row_to_key, axis=1)
-    migrate_rows['dataset'] = migrate_rows.apply(
-        billing_row_to_dataset, axis=1, args=(dataset_to_gcp_map,)
+    migrate_rows.insert(0, 'id', migrate_rows.apply(billing_row_to_key, axis=1))
+    migrate_rows.insert(
+        1,
+        'dataset',
+        migrate_rows.apply(billing_row_to_dataset, axis=1, args=(dataset_to_gcp_map,)),
     )
 
-    # Merge the rows with the destination table
+    result = insert_new_rows(
+        DESTINATION_TABLE, migrate_rows, (start_period, finish_period)
+    )
+    print(f"{result} new rows inserted")
 
-    migrate_rows.to_gbq(DESTINATION_TABLE, if_exists='merge')
+    return result
 
-    return
+
+def insert_new_rows(table: str, df: pd.DataFrame, date_range: Tuple[str, str] = None):
+    """Insert new rows into a table"""
+    new_ids = "'" + "','".join(df['id'].tolist()) + "'"
+    _query = f"""
+        SELECT id FROM `{table}`
+        WHERE DATE(usage_end_time) >= '{date_range[0]}'
+            AND DATE(usage_end_time) <= '{date_range[1]}'
+            AND id IN ({new_ids})
+    """
+    existing_ids = set(bigquery_client.query(_query).result().to_dataframe()['id'])
+
+    # Filter out any rows that are already in the table
+    df = df[~df['id'].isin(existing_ids)]
+
+    # Remove billing account id
+    df = df.drop(columns=['billing_account_id'])
+
+    # Count number of rows adding
+    adding_rows = len(df)
+
+    # Insert the new rows
+    project_id = table.split('.')[0]
+    table_schema = get_schema()
+    try:
+        df.to_gbq(
+            table, project_id=project_id, table_schema=table_schema, if_exists='append'
+        )
+    except Exception as e:
+        raise Exception(f'Failed to insert rows: {e}')
+    finally:
+        return adding_rows
+
+
+def get_schema():
+    pwd = Path(__file__).parent.parent.resolve()
+    schema_path = pwd / 'schema' / 'schema.json'
+    with open(schema_path, 'r') as f:
+        return json.load(f)
 
 
 def billing_row_to_key(row):
-    """Convert a billing row to a key"""
-    """
-        service.id, usage_start_time, usage_end_time, labels.bucket, usage[0].amount,
-    """
-    return (
-        row['service']['id'],
-        row['usage_start_time'],
-        row['usage_end_time'],
-        row['labels'][0].get('bucket', None) if row['labels'].any() else None,
-        row['usage']['amount'],
-    )
+    """Convert a billing row to a hash which will be the row key"""
+    data = tuple(row)
+    id = hashlib.md5()
+
+    for item in data:
+        id.update(str(item).encode('utf-8'))
+
+    return id.hexdigest()
 
 
 def billing_row_to_dataset(row, dataset_to_gcp_map):
@@ -79,7 +122,7 @@ def billing_row_to_dataset(row, dataset_to_gcp_map):
 def get_dataset_to_gcp_map() -> dict:
     """Get the server-config from the secret manager"""
     server_config = json.loads(read_secret(ANALYSIS_RUNNER_PROJECT_ID, 'server-config'))
-    return {k: v['projectId'] for k, v in server_config.items()}
+    return {v['projectId']: k for k, v in server_config.items()}
 
 
 if __name__ == '__main__':
