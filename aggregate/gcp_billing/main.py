@@ -31,8 +31,8 @@ bigquery_client = bigquery.Client()
 
 def main():
     """Main entry point for the Cloud Function"""
-    start_period = "2022-04-05"
-    finish_period = "2022-04-05"
+    start_period = "2022-04-09"
+    finish_period = "2022-04-11"
 
     # Get the dataset to GCP project map
     dataset_to_gcp_map = get_dataset_to_gcp_map()
@@ -48,6 +48,11 @@ def main():
     """
 
     migrate_rows = bigquery_client.query(_query).result().to_dataframe()
+
+    if len(migrate_rows) == 0:
+        print(f"No rows to migrate")
+        return
+
     migrate_rows.insert(0, 'id', migrate_rows.apply(billing_row_to_key, axis=1))
     migrate_rows.insert(
         1,
