@@ -10,6 +10,7 @@ Tasks:
 - Only want to transfer data from the projects in the server-config
 - Can't duplicate rows (so maybe just grab only settled data within START + END of previous time period)
 - Service ID should be faithfully handed over
+- Should search and update for [START_PERIOD, END_PERIOD)
 """
 
 import json
@@ -43,7 +44,7 @@ def main():
     _query = f"""
         SELECT * FROM `{SOURCE_TABLE}`
         WHERE DATE(usage_end_time) >= '{start_period}'
-            AND DATE(usage_end_time) <= '{finish_period}'
+            AND DATE(usage_end_time) < '{finish_period}'
             AND project.id IN ({allowed_project_ids})
     """
 
