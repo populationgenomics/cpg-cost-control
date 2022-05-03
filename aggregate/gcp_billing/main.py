@@ -15,98 +15,65 @@ Tasks:
 
 import json
 import hashlib
-from pathlib import Path
-import pandas as pd
-from typing import Tuple
+import logging
+
+from datetime import datetime
 from google.cloud import bigquery
-
 from cpg_utils.cloud import read_secret
+from ..utils import insert_new_rows_in_table
 
+logging.basicConfig(level=logging.INFO)
 
 ANALYSIS_RUNNER_PROJECT_ID = 'analysis-runner'
 SOURCE_TABLE = 'billing-admin-290403.billing.gcp_billing_export_v1_01D012_20A6A2_CBD343'
 DESTINATION_TABLE = 'sabrina-dev-337923.billing.aggregate'
 
-bigquery_client = bigquery.Client()
-
 
 def main():
     """Main entry point for the Cloud Function"""
-    start_period = "2022-04-09"
-    finish_period = "2022-04-11"
+    start_period = datetime(year=2022, month=4, day=9)
+    finish_period = datetime(year=2022, month=4, day=11)
+
+    bigquery_client = bigquery.Client()
 
     # Get the dataset to GCP project map
     dataset_to_gcp_map = get_dataset_to_gcp_map()
+
+    def get_dataset(row):
+        return billing_row_to_dataset(row, dataset_to_gcp_map)
+
     allowed_project_ids = "'" + "','".join(dataset_to_gcp_map.keys()) + "'"
 
     # Get the billing date in the time period
     # Filter out any rows that aren't in the allowed project ids
     _query = f"""
         SELECT * FROM `{SOURCE_TABLE}`
-        WHERE DATE(usage_end_time) >= '{start_period}'
-            AND DATE(usage_end_time) < '{finish_period}'
+        WHERE DATE(usage_start_time) >= DATE('{start_period.strftime('%Y-%m-%d')}')
+            AND DATE(usage_start_time) < DATE('{finish_period.strftime('%Y-%m-%d')}')
             AND project.id IN ({allowed_project_ids})
     """
 
     migrate_rows = bigquery_client.query(_query).result().to_dataframe()
 
     if len(migrate_rows) == 0:
-        print(f"No rows to migrate")
+        logging.info(f"No rows to migrate")
         return
 
+    # Add id and dataset to the row
     migrate_rows.insert(0, 'id', migrate_rows.apply(billing_row_to_key, axis=1))
-    migrate_rows.insert(
-        1,
-        'dataset',
-        migrate_rows.apply(billing_row_to_dataset, axis=1, args=(dataset_to_gcp_map,)),
-    )
-
-    result = insert_new_rows(
-        DESTINATION_TABLE, migrate_rows, (start_period, finish_period)
-    )
-    print(f"{result} new rows inserted")
-
-    return result
-
-
-def insert_new_rows(table: str, df: pd.DataFrame, date_range: Tuple[str, str] = None):
-    """Insert new rows into a table"""
-    new_ids = "'" + "','".join(df['id'].tolist()) + "'"
-    _query = f"""
-        SELECT id FROM `{table}`
-        WHERE DATE(usage_end_time) >= '{date_range[0]}'
-            AND DATE(usage_end_time) <= '{date_range[1]}'
-            AND id IN ({new_ids})
-    """
-    existing_ids = set(bigquery_client.query(_query).result().to_dataframe()['id'])
-
-    # Filter out any rows that are already in the table
-    df = df[~df['id'].isin(existing_ids)]
+    migrate_rows.insert(1, 'dataset', migrate_rows.apply(get_dataset, axis=1))
 
     # Remove billing account id
-    df = df.drop(columns=['billing_account_id'])
+    migrate_rows = migrate_rows.drop(columns=['billing_account_id'])
 
-    # Count number of rows adding
-    adding_rows = len(df)
+    result = insert_new_rows_in_table(
+        bigquery_client,
+        DESTINATION_TABLE,
+        migrate_rows,
+        (start_period, finish_period),
+    )
 
-    # Insert the new rows
-    project_id = table.split('.')[0]
-    table_schema = get_schema()
-    try:
-        df.to_gbq(
-            table, project_id=project_id, table_schema=table_schema, if_exists='append'
-        )
-    except Exception as e:
-        raise Exception(f'Failed to insert rows: {e}')
-    finally:
-        return adding_rows
-
-
-def get_schema():
-    pwd = Path(__file__).parent.parent.resolve()
-    schema_path = pwd / 'schema' / 'schema.json'
-    with open(schema_path, 'r') as f:
-        return json.load(f)
+    return result
 
 
 def billing_row_to_key(row):

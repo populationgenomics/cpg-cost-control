@@ -16,21 +16,34 @@ This cloud function runs WEEKLY, and distributes the cost of SEQR on the sample 
     - Maybe the label could include the relative heuristic
 """
 
-from collections import defaultdict
-from datetime import datetime
 import os
 import json
 import logging
 import requests
+import pandas as pd
+
+from datetime import datetime
+from google.cloud import bigquery
+from collections import defaultdict
+
+from ..utils import insert_new_rows_in_table
+
 
 logging.basicConfig(level=logging.INFO)
 
 SERVICE_ID = 'seqr'
 SEQR_HAIL_BILLING_PROJECT = 'seqr'
 
+GCP_BILLING_BQ_TABLE = (
+    'billing-admin-290403.billing.gcp_billing_export_v1_01D012_20A6A2_CBD343'
+)
+DESTINATION_TABLE = 'sabrina-dev-337923.billing.aggregate'
+
 BASE = 'https://batch.hail.populationgenomics.org.au'
 BATCHES_API = BASE + '/api/v1alpha/batches'
 JOBS_API = BASE + '/api/v1alpha/batches/{batch_id}/jobs/resources'
+
+bigquery_client = bigquery.Client()
 
 
 def get_datasets():
@@ -184,7 +197,14 @@ def get_currency_conversion_rate_for_time(time: datetime):
     and apply to each job that starts within the month, regardless of when
     the job finishes.
     """
-    raise NotImplementedError
+    query = f"""
+        SELECT currency_conversion_rate
+        FROM {GCP_BILLING_BQ_TABLE}
+        WHER DATE(_PARTITIONTIME) = DATE('{time.date()}')
+        LIMIT 1
+    """
+    result = bigquery_client.query(query).result().next()
+    return result['currency_conversion_rate']
 
 
 def main(request=None):
@@ -203,7 +223,7 @@ def main(request=None):
     # Now we want to do a bunch of aggregation on the seqr jobs to find:
     #   - Jobs that belong to a specific billing project
 
-    entry_items = {}
+    entry_items = []
     jobs_with_no_dataset = []
     for batch in batches:
         for job in batch['jobs']:
@@ -230,65 +250,71 @@ def main(request=None):
                     batch_resource, usage
                 )
 
-                entry_items[key] = {
-                    "dataset": dataset,
-                    "service": {
+                entry_items.append(
+                    {
                         "id": key,
-                        "description": 'SEQR processing (no-aggregated)',
-                    },
-                    "sku": {
-                        "id": name,
-                        "description": 'seqr processing (non-aggregated)',
-                    },
-                    "usage_start_time": job['start_time'],
-                    "usage_end_time": job['finish_time'],
-                    # "project": {
-                    #      "id",
-                    #      "number",
-                    #      "labels",
-                    #              "key",
-                    #              "value",
-                    #      "ancestry_numbers",
-                    #      "ancestors",
-                    #              "resource_name",
-                    #              "display_name",
-                    # }
-                    "labels": labels,
-                    "system_labels": [],
-                    "location": {
-                        "location": 'australia-southeast1',
-                        "country": 'Australia',
-                        "region": 'australia',
-                        "zone": None,
-                    },
-                    "export_time": datetime.now().isoformat(),
-                    "cost": 0.0,
-                    "currency": "AUD",
-                    "currency_conversion_rate": currency_conversion_rate,
-                    "usage": {
-                        "amount": usage,
-                        "unit": get_unit_for_batch_resource_type(batch_resource),
-                        "amount_in_pricing_units": cost,
-                        "pricing_unit": "AUD",
-                    },
-                    # "credits",
-                    #     "amount",
-                    #     "full_name",
-                    #     "id",
-                    #     "type",
-                    "invoice": {
-                        "month": job['start_time'].month + job['start_time'].year
-                    },
-                    # "cost_type",
-                    # "adjustment_info",
-                    #     "id",
-                    #     "description",
-                    #     "mode",
-                    #     "type",
-                }
+                        "dataset": dataset,
+                        "service": {
+                            "id": key,
+                            "description": 'SEQR processing (no-aggregated)',
+                        },
+                        "sku": {
+                            "id": name,
+                            "description": 'seqr processing (non-aggregated)',
+                        },
+                        "usage_start_time": job['start_time'],
+                        "usage_end_time": job['finish_time'],
+                        # "project": {
+                        #      "id",
+                        #      "number",
+                        #      "labels",
+                        #              "key",
+                        #              "value",
+                        #      "ancestry_numbers",
+                        #      "ancestors",
+                        #              "resource_name",
+                        #              "display_name",
+                        # }
+                        "labels": labels,
+                        "system_labels": [],
+                        "location": {
+                            "location": 'australia-southeast1',
+                            "country": 'Australia',
+                            "region": 'australia',
+                            "zone": None,
+                        },
+                        "export_time": datetime.now().isoformat(),
+                        "cost": 0.0,
+                        "currency": "AUD",
+                        "currency_conversion_rate": currency_conversion_rate,
+                        "usage": {
+                            "amount": usage,
+                            "unit": get_unit_for_batch_resource_type(batch_resource),
+                            "amount_in_pricing_units": cost,
+                            "pricing_unit": "AUD",
+                        },
+                        # "credits",
+                        #     "amount",
+                        #     "full_name",
+                        #     "id",
+                        #     "type",
+                        "invoice": {
+                            "month": job['start_time'].month + job['start_time'].year
+                        },
+                        # "cost_type",
+                        # "adjustment_info",
+                        #     "id",
+                        #     "description",
+                        #     "mode",
+                        #     "type",
+                    }
+                )
 
-    # TODO: bulk upsert entry_items
-    raise NotImplementedError
+    # Convert dict to dataframe
+    df = pd.DataFrame.from_records(entry_items)
+
+    # Insert new rows into aggregation table
+    insert_new_rows(GCP_BILLING_BQ_TABLE, df, (day, day))
 
 
 def get_key_from_batch_job(batch, job):
