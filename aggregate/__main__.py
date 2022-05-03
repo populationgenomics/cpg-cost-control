@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
-"""Python Pulumi program for creating Google Cloud Functions.
+"""
+Python Pulumi program for creating Google Cloud Functions.
 
 TODO: Modify this program to create all our aggregate cloud functions.
 
@@ -8,8 +9,9 @@ Create a single Google Cloud Function. The deployed application will calculate
 the estimated travel time to a given location, sending the results via SMS.
 """
 
-import time
 import os
+import sys
+import time
 import pulumi
 
 from pulumi_gcp import storage
@@ -19,67 +21,88 @@ from pulumi_gcp import cloudfunctions
 # pylint: disable=C0103
 
 # File path to where the Cloud Function's source code is located.
-PATH_TO_SOURCE_CODE = "./functions"
+PATH_TO_SOURCE_CODE = './'
 
 # Get values from Pulumi config to use as environment variables in our Cloud Function.
-config = pulumi.Config(name=None)
+config = pulumi.Config(name='gcp')
+
 config_values = {
-    # Target destination and travel time offset.
-    "DESTINATION": config.get("destination"),
-    "TRAVEL_OFFSET": config.get("travelOffset"),
-    # Google Maps API key.
-    "GOOGLE_MAPS_API_KEY": config.get("googleMapsApiKey"),
-    # Twilio account for sending SMS messages.
-    "TWILLIO_ACCESS_TOKEN": config.get("twillioAccessToken"),
-    "TWILLIO_ACCOUNT_SID": config.get("twillioAccountSid"),
-    "TO_PHONE_NUMBER": config.get("toPhoneNumber"),
-    "FROM_PHONE_NUMBER": config.get("fromPhoneNumber"),
+    'PROJECT': config.get('project'),
+    'REGION': config.get('region'),
 }
 
+name = 'aggregate-cloud-functions'
+bucket_name = f'{config_values["PROJECT"]}-{name}'
+
 # We will store the source code to the Cloud Function in a Google Cloud Storage bucket.
-bucket = storage.Bucket("eta_demo_bucket")
+bucket = storage.Bucket(bucket_name, location=config_values['REGION'])
 
 # The Cloud Function source code itself needs to be zipped up into an
 # archive, which we create using the pulumi.AssetArchive primitive.
-assets = {}
-for file in os.listdir(PATH_TO_SOURCE_CODE):
-    location = os.path.join(PATH_TO_SOURCE_CODE, file)
-    asset = pulumi.FileAsset(path=location)
-    assets[file] = asset
 
-archive = pulumi.AssetArchive(assets=assets)
+
+def archive_folder(path: str) -> pulumi.AssetArchive:
+    assets = {}
+    for file in os.listdir(path):
+        if file.startswith('_'):
+            continue
+
+        location = os.path.join(path, file)
+        if os.path.isdir(location):
+            asset = archive_folder(location)
+        else:
+            asset = pulumi.FileAsset(path=location)
+
+        assets[file] = asset
+
+    return pulumi.AssetArchive(assets)
+
+
+archive = archive_folder(PATH_TO_SOURCE_CODE)
 
 # Create the single Cloud Storage object, which contains all of the function's
-# source code. ("main.py" and "requirements.txt".)
+# source code. ('main.py' and 'requirements.txt'.)
 source_archive_object = storage.BucketObject(
-    "eta_demo_object",
-    name="main.py-%f" % time.time(),
+    bucket_name,
+    name=f'{name}-{time.time()}',
     bucket=bucket.name,
     source=archive,
 )
 
 # Create the Cloud Function, deploying the source we just uploaded to Google
 # Cloud Storage.
-fxn = cloudfunctions.Function(
-    "eta_demo_function",
-    entry_point="get_demo",
-    environment_variables=config_values,
-    region="us-central1",
-    runtime="python37",
-    source_archive_bucket=bucket.name,
-    source_archive_object=source_archive_object.name,
-    trigger_http=True,
-)
+functions = pulumi.Config(name='opts').get('functions')
 
-invoker = cloudfunctions.FunctionIamMember(
-    "invoker",
-    project=fxn.project,
-    region=fxn.region,
-    cloud_function=fxn.name,
-    role="roles/cloudfunctions.invoker",
-    member="allUsers",
-)
 
-# Export the DNS name of the bucket and the cloud function URL.
-pulumi.export("bucket_name", bucket.url)
-pulumi.export("fxn_url", fxn.https_trigger_url)
+def create_cloud_function(
+    name: str,
+    function_bucket: storage.Bucket,
+    source_archive_object: storage.BucketObject,
+):
+    fxn = cloudfunctions.Function(
+        name,
+        entry_point='main.py',
+        region=config_values['REGION'],
+        runtime='python3',
+        source_archive_bucket=function_bucket.name,
+        source_archive_object=source_archive_object.name,
+    )
+
+    invoker = cloudfunctions.FunctionIamMember(
+        'invoker',
+        project=fxn.project,
+        region=fxn.region,
+        cloud_function=fxn.name,
+        role='roles/cloudfunctions.invoker',
+        member='allUsers',
+    )
+
+    return fxn
+
+
+# Deploy all functions
+pulumi.export('bucket_name', bucket.url)
+for function in functions:
+    # Export the DNS name of the bucket and the cloud function URL.
+    fxn = create_cloud_function(function, bucket, source_archive_object)
+    pulumi.export('fxn_url', fxn.https_trigger_url)

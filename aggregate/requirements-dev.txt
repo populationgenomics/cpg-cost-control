@@ -1,0 +1,2 @@
+pulumi==3.31.0
+pulumi-gcp==6.21.0
