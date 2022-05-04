@@ -28,8 +28,8 @@ def insert_new_rows_in_table(
     new_ids = "'" + "','".join(df['id'].tolist()) + "'"
     _query = f"""
         SELECT id FROM `{table}`
-        WHERE DATE(usage_start_time) >= '{date_range[0].strftime('%Y-%m-%d')}'
-            AND DATE(usage_start_time) <= '{date_range[1].strftime('%Y-%m-%d')}'
+        WHERE usage_end_time >= {date_range[0].isoformat()}
+            AND usage_end_time < {date_range[1].isoformat()}
             AND id IN ({new_ids})
     """
     existing_ids = set(client.query(_query).result().to_dataframe()['id'])

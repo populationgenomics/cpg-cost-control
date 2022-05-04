@@ -29,10 +29,13 @@ SOURCE_TABLE = 'billing-admin-290403.billing.gcp_billing_export_v1_01D012_20A6A2
 DESTINATION_TABLE = 'sabrina-dev-337923.billing.aggregate'
 
 
-def main():
+def main(request=None):
     """Main entry point for the Cloud Function"""
-    start_period = datetime(year=2022, month=4, day=9)
-    finish_period = datetime(year=2022, month=4, day=11)
+    end_day = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    start_day = end_day - datetime.timedelta(days=1)
+    if request:
+        start_day = request.start_day
+        end_day = request.end_day
 
     bigquery_client = bigquery.Client()
 
@@ -48,8 +51,8 @@ def main():
     # Filter out any rows that aren't in the allowed project ids
     _query = f"""
         SELECT * FROM `{SOURCE_TABLE}`
-        WHERE DATE(usage_start_time) >= DATE('{start_period.strftime('%Y-%m-%d')}')
-            AND DATE(usage_start_time) < DATE('{finish_period.strftime('%Y-%m-%d')}')
+        WHERE usage_end_time >= {start_day.isoformat()}
+            AND usage_end_time < {end_day.isoformat()}
             AND project.id IN ({allowed_project_ids})
     """
 
@@ -70,7 +73,7 @@ def main():
         bigquery_client,
         DESTINATION_TABLE,
         migrate_rows,
-        (start_period, finish_period),
+        (start_day, end_day),
     )
 
     return result

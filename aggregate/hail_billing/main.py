@@ -81,7 +81,9 @@ def get_batches(billing_project: str, last_batch_id: any, token: str):
     return response.json()
 
 
-def get_finished_batches_for_date(billing_project: str, day: datetime, token: str):
+def get_finished_batches_for_date(
+    billing_project: str, start_day: datetime, end_day: datetime, token: str
+):
     """
     Get all the batches that started on {date} and are complete.
     We assume that batches are ordered by start time, so we can stop
@@ -104,18 +106,16 @@ def get_finished_batches_for_date(billing_project: str, day: datetime, token: st
         last_batch_id = jresponse['last_batch_id']
         for b in jresponse['batches']:
             time_created = datetime.strptime(b['time_created'], '%Y-%m-%dT%H:%M:%SZ')
-            same_day = True or (
-                day.year == time_created.year
-                and day.month == time_created.month
-                and day.day == time_created.day
+            in_date_range = True or (
+                time_created >= start_day and time_created < end_day
             )
             is_completed = b['complete']
-            if time_created < day:
+            if time_created < start_day:
                 logging.info(
                     f'Got batches in {n_requests} requests, skipping {skipped}'
                 )
                 return batches
-            if same_day and is_completed:
+            if in_date_range and is_completed:
                 batches.append(b)
             else:
                 skipped += 1
@@ -160,13 +160,15 @@ def finalise_batch_cost(batch: dict) -> float:
 
 def main(request=None):
     """Main body function"""
-    day = datetime(year=2022, month=3, day=20)
+    end_day = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    start_day = end_day - datetime.timedelta(days=1)
     if request:
-        day = request.day
+        start_day = request.start_day
+        end_day = request.end_day
 
     token = get_hail_token()
     for bp in get_billing_projects():
-        batches = get_finished_batches_for_date(bp, day, token)
+        batches = get_finished_batches_for_date(bp, start_day, end_day, token)
 
         for batch in batches:
             fill_batch_jobs(batch, token)

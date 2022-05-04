@@ -100,6 +100,11 @@ def create_cloud_function(
     return fxn
 
 
+# Cloud scheduler -> cron
+# Cloud scheduler -> pubsub -> function
+# Set the timezone to australia
+# Compare raw dates to UTC dates
+
 # Deploy all functions
 pulumi.export('bucket_name', bucket.url)
 for function in functions:
