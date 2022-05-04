@@ -10,12 +10,13 @@ the estimated travel time to a given location, sending the results via SMS.
 """
 
 import os
-import sys
+import ast
 import time
 import pulumi
 
-from pulumi_gcp import storage
-from pulumi_gcp import cloudfunctions
+import pulumi_gcp as gcp
+
+from base64 import b64encode, b64decode
 
 # Disable rule for that module-level exports be ALL_CAPS, for legibility.
 # pylint: disable=C0103
@@ -35,7 +36,13 @@ name = 'aggregate-cloud-functions'
 bucket_name = f'{config_values["PROJECT"]}-{name}'
 
 # We will store the source code to the Cloud Function in a Google Cloud Storage bucket.
-bucket = storage.Bucket(bucket_name, location=config_values['REGION'])
+function_bucket = gcp.storage.Bucket(
+    bucket_name,
+    name=bucket_name,
+    location=config_values['REGION'],
+    project=config_values['PROJECT'],
+    uniform_bucket_level_access=True,
+)
 
 # The Cloud Function source code itself needs to be zipped up into an
 # archive, which we create using the pulumi.AssetArchive primitive.
@@ -49,7 +56,7 @@ def archive_folder(path: str) -> pulumi.AssetArchive:
 
         location = os.path.join(path, file)
         if os.path.isdir(location):
-            asset = archive_folder(location)
+            asset = pulumi.FileArchive(location)
         else:
             asset = pulumi.FileAsset(path=location)
 
@@ -62,42 +69,41 @@ archive = archive_folder(PATH_TO_SOURCE_CODE)
 
 # Create the single Cloud Storage object, which contains all of the function's
 # source code. ('main.py' and 'requirements.txt'.)
-source_archive_object = storage.BucketObject(
+source_archive_object = gcp.storage.BucketObject(
     bucket_name,
     name=f'{name}-{time.time()}',
-    bucket=bucket.name,
+    bucket=function_bucket.name,
     source=archive,
 )
-
-# Create the Cloud Function, deploying the source we just uploaded to Google
-# Cloud Storage.
-functions = pulumi.Config(name='opts').get('functions')
 
 
 def create_cloud_function(
     name: str,
-    function_bucket: storage.Bucket,
-    source_archive_object: storage.BucketObject,
+    pubsub_topic: gcp.pubsub.Topic,
+    function_bucket: gcp.storage.Bucket,
+    source_archive_object: gcp.storage.BucketObject,
 ):
-    fxn = cloudfunctions.Function(
-        name,
-        entry_point='main.py',
-        region=config_values['REGION'],
-        runtime='python3',
+    trigger = gcp.cloudfunctions.FunctionEventTriggerArgs(
+        event_type="google.pubsub.topic.publish", resource=pubsub_topic.name
+    )
+
+    opts = {'GOOGLE_FUNCTION_SOURCE': f'{name}/main.py'}
+    fxn = gcp.cloudfunctions.Function(
+        f"{name}-function",
+        entry_point=f'main',
+        build_environment_variables=opts,
+        runtime='python39',
+        event_trigger=trigger,
         source_archive_bucket=function_bucket.name,
         source_archive_object=source_archive_object.name,
+        project=config_values['PROJECT'],
+        region=config_values['REGION'],
+        opts=pulumi.ResourceOptions(
+            depends_on=[function_bucket, source_archive_object, pubsub_topic]
+        ),
     )
 
-    invoker = cloudfunctions.FunctionIamMember(
-        'invoker',
-        project=fxn.project,
-        region=fxn.region,
-        cloud_function=fxn.name,
-        role='roles/cloudfunctions.invoker',
-        member='allUsers',
-    )
-
-    return fxn
+    return fxn, trigger
 
 
 # Cloud scheduler -> cron
@@ -105,9 +111,38 @@ def create_cloud_function(
 # Set the timezone to australia
 # Compare raw dates to UTC dates
 
+# Create the Cloud Function, deploying the source we just uploaded to Google
+# Cloud Storage.
+functions = ast.literal_eval(pulumi.Config(name='opts').get('functions'))
+
 # Deploy all functions
-pulumi.export('bucket_name', bucket.url)
+pulumi.export('bucket_name', function_bucket.url)
+
+# Create one pubsub to be triggered by the cloud scheduler
+pubsub = gcp.pubsub.Topic(f"{name}-topic", project=config_values['PROJECT'])
+
 for function in functions:
-    # Export the DNS name of the bucket and the cloud function URL.
-    fxn = create_cloud_function(function, bucket, source_archive_object)
+    # Create the function and it's corresponding pubsub and subscription.
+    fxn, trigger = create_cloud_function(
+        function, pubsub, function_bucket, source_archive_object
+    )
+
     pulumi.export('fxn_url', fxn.https_trigger_url)
+
+
+def b64encode_str(s: str) -> str:
+    return b64encode(s.encode('utf-8')).decode('utf-8')
+
+
+# Create a cron job to run the function every day at midnight.
+job = gcp.cloudscheduler.Job(
+    f"{name}-job",
+    pubsub_target=gcp.cloudscheduler.JobPubsubTargetArgs(
+        topic_name=pubsub.id,
+        data=b64encode_str('Run the functions'),
+    ),
+    schedule='every 24 hours',
+    project=config_values['PROJECT'],
+    region=config_values['REGION'],
+    opts=pulumi.ResourceOptions(depends_on=[pubsub]),
+)

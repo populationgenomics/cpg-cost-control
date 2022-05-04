@@ -4,5 +4,5 @@ google-api-python-client==2.10.0
 google-cloud-secret-manager==2.0.0
 google-cloud-bigquery==3.0.1
 pandas==1.4.2
-pandas-gbp==0.17.4
+pandas-gbq==0.17.4
 pulumi==3.28.0
