@@ -22,11 +22,10 @@ import logging
 import requests
 import pandas as pd
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from google.cloud import bigquery
-from collections import defaultdict
 
-from ..utils import insert_new_rows_in_table
+from .utils import insert_new_rows_in_table
 
 
 logging.basicConfig(level=logging.INFO)
@@ -209,8 +208,9 @@ def get_currency_conversion_rate_for_time(time: datetime):
 
 def main(request=None):
     """Main body function"""
-    end_day = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-    start_day = end_day - datetime.timedelta(days=1)
+    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    end_day = today - timedelta(days=1)
+    start_day = end_day - timedelta(days=1)
     if request:
         start_day = request.start_day
         end_day = request.end_day

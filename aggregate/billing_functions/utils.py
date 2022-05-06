@@ -12,7 +12,7 @@ logging.basicConfig(level=logging.INFO)
 
 def get_schema():
     """Get the schema for the table"""
-    pwd = Path(__file__).parent.resolve()
+    pwd = Path(__file__).parent.parent.resolve()
     schema_path = pwd / 'schema' / 'aggregate_schema.json'
     with open(schema_path, 'r') as f:
         return json.load(f)
@@ -28,8 +28,8 @@ def insert_new_rows_in_table(
     new_ids = "'" + "','".join(df['id'].tolist()) + "'"
     _query = f"""
         SELECT id FROM `{table}`
-        WHERE usage_end_time >= {date_range[0].isoformat()}
-            AND usage_end_time < {date_range[1].isoformat()}
+        WHERE usage_end_time >= '{date_range[0].isoformat()}'
+            AND usage_end_time < '{date_range[1].isoformat()}'
             AND id IN ({new_ids})
     """
     existing_ids = set(client.query(_query).result().to_dataframe()['id'])

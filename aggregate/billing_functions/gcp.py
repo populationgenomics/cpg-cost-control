@@ -17,10 +17,10 @@ import json
 import hashlib
 import logging
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from google.cloud import bigquery
 from cpg_utils.cloud import read_secret
-from ..utils import insert_new_rows_in_table
+from .utils import insert_new_rows_in_table
 
 logging.basicConfig(level=logging.INFO)
 
@@ -31,8 +31,9 @@ DESTINATION_TABLE = 'sabrina-dev-337923.billing.aggregate'
 
 def main(request=None):
     """Main entry point for the Cloud Function"""
-    end_day = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-    start_day = end_day - datetime.timedelta(days=1)
+    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    end_day = today - timedelta(days=1)
+    start_day = end_day - timedelta(days=1)
     if request:
         start_day = request.start_day
         end_day = request.end_day
@@ -51,8 +52,8 @@ def main(request=None):
     # Filter out any rows that aren't in the allowed project ids
     _query = f"""
         SELECT * FROM `{SOURCE_TABLE}`
-        WHERE usage_end_time >= {start_day.isoformat()}
-            AND usage_end_time < {end_day.isoformat()}
+        WHERE usage_end_time >= '{start_day.isoformat()}'
+            AND usage_end_time < '{end_day.isoformat()}'
             AND project.id IN ({allowed_project_ids})
     """
 

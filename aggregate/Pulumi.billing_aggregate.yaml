@@ -2,7 +2,6 @@ config:
   gcp:project: sabrina-dev-337923
   gcp:region: australia-southeast1
   opts:functions:
-    # - azure
-    - gcp_billing
-    - hail_billing
+    - gcp
+    - hail
     - seqr

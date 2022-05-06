@@ -1,4 +1,6 @@
-# Azure synchronisation
+# Billing Cloud Functions
+
+## Azure synchronisation
 
 TBA
 

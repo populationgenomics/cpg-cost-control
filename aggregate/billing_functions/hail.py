@@ -31,7 +31,7 @@ Tasks:
         (ie: finished between START + END of previous time period)
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 import json
 import logging
@@ -160,8 +160,9 @@ def finalise_batch_cost(batch: dict) -> float:
 
 def main(request=None):
     """Main body function"""
-    end_day = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-    start_day = end_day - datetime.timedelta(days=1)
+    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    end_day = today - timedelta(days=1)
+    start_day = end_day - timedelta(days=1)
     if request:
         start_day = request.start_day
         end_day = request.end_day

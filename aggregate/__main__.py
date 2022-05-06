@@ -35,6 +35,13 @@ config_values = {
 name = 'aggregate-cloud-functions'
 bucket_name = f'{config_values["PROJECT"]}-{name}'
 
+# Start by enabling all cloud function services
+gcp.projects.Service(
+    'cloudfunctions-service',
+    service='cloudfunctions.googleapis.com',
+    disable_on_destroy=False,
+)
+
 # We will store the source code to the Cloud Function in a Google Cloud Storage bucket.
 function_bucket = gcp.storage.Bucket(
     bucket_name,
@@ -46,18 +53,13 @@ function_bucket = gcp.storage.Bucket(
 
 # The Cloud Function source code itself needs to be zipped up into an
 # archive, which we create using the pulumi.AssetArchive primitive.
-
-
 def archive_folder(path: str) -> pulumi.AssetArchive:
     assets = {}
     for file in os.listdir(path):
-        if file.startswith('_'):
-            continue
-
         location = os.path.join(path, file)
         if os.path.isdir(location):
             asset = pulumi.FileArchive(location)
-        else:
+        elif location.endswith('.py') or location.endswith('.txt'):
             asset = pulumi.FileAsset(path=location)
 
         assets[file] = asset
@@ -71,7 +73,7 @@ archive = archive_folder(PATH_TO_SOURCE_CODE)
 # source code. ('main.py' and 'requirements.txt'.)
 source_archive_object = gcp.storage.BucketObject(
     bucket_name,
-    name=f'{name}-{time.time()}',
+    name=f'{name}-source-archive-{time.time()}',
     bucket=function_bucket.name,
     source=archive,
 )
@@ -87,11 +89,9 @@ def create_cloud_function(
         event_type="google.pubsub.topic.publish", resource=pubsub_topic.name
     )
 
-    opts = {'GOOGLE_FUNCTION_SOURCE': f'{name}/main.py'}
     fxn = gcp.cloudfunctions.Function(
-        f"{name}-function",
-        entry_point=f'main',
-        build_environment_variables=opts,
+        f"{name}-billing-function",
+        entry_point=f'{name}',
         runtime='python39',
         event_trigger=trigger,
         source_archive_bucket=function_bucket.name,
@@ -127,7 +127,8 @@ for function in functions:
         function, pubsub, function_bucket, source_archive_object
     )
 
-    pulumi.export('fxn_url', fxn.https_trigger_url)
+    pulumi.export(f'{function}_fxn_name', fxn.name)
+    pulumi.export(f'{function}_fxn_url', fxn.https_trigger_url)
 
 
 def b64encode_str(s: str) -> str:
@@ -146,3 +147,5 @@ job = gcp.cloudscheduler.Job(
     region=config_values['REGION'],
     opts=pulumi.ResourceOptions(depends_on=[pubsub]),
 )
+
+pulumi.export('cron_job', job.id)
