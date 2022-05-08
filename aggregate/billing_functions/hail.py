@@ -31,19 +31,39 @@ Tasks:
         (ie: finished between START + END of previous time period)
 """
 
+from collections import defaultdict
 from datetime import datetime, timedelta
 import os
 import json
 import logging
+from typing import Dict, List
 import requests
+from google.cloud import bigquery
+
+import pandas as pd
+
+from utils import insert_new_rows_in_table
+
+
+GCP_BILLING_BQ_TABLE = (
+    'billing-admin-290403.billing.gcp_billing_export_v1_01D012_20A6A2_CBD343'
+)
+GCP_DEST_TABLE = 'billing-admin-290403.billing_aggregate.michael-dev'
+bigquery_client = bigquery.Client()
+
 
 logging.basicConfig(level=logging.INFO)
 
 SERVICE_ID = 'hail'
 
 BASE = 'https://batch.hail.populationgenomics.org.au'
+UI_URL = BASE + '/batches/{batch_id}'
 BATCHES_API = BASE + '/api/v1alpha/batches'
-JOBS_API = BASE + '/api/v1alpha/batches/{batch_id}/jobs'
+JOBS_API = BASE + '/api/v1alpha/batches/{batch_id}/jobs/resources'
+
+
+def parse_hail_time(time_str: str) -> datetime:
+    return datetime.strptime(time_str, '%Y-%m-%dT%H:%M:%SZ')
 
 
 def get_billing_projects():
@@ -99,23 +119,25 @@ def get_finished_batches_for_date(
         n_requests += 1
         jresponse = get_batches(billing_project, last_batch_id, token)
 
-        if jresponse['last_batch_id'] == last_batch_id:
+        if 'last_batch_id' in jresponse and jresponse['last_batch_id'] == last_batch_id:
             raise ValueError(
                 f'Something weird is happening with last_batch_job: {last_batch_id}'
             )
         last_batch_id = jresponse['last_batch_id']
         for b in jresponse['batches']:
-            time_created = datetime.strptime(b['time_created'], '%Y-%m-%dT%H:%M:%SZ')
-            in_date_range = True or (
-                time_created >= start_day and time_created < end_day
-            )
-            is_completed = b['complete']
-            if time_created < start_day:
+            if not b['time_completed'] or not b['complete']:
+                skipped += 1
+                continue
+
+            time_completed = parse_hail_time(b['time_completed'])
+            in_date_range = time_completed >= start_day and time_completed < end_day
+
+            if time_completed < start_day:
                 logging.info(
                     f'Got batches in {n_requests} requests, skipping {skipped}'
                 )
                 return batches
-            if in_date_range and is_completed:
+            if in_date_range:
                 batches.append(b)
             else:
                 skipped += 1
@@ -130,7 +152,13 @@ def fill_batch_jobs(batch: dict, token: str):
     batch['jobs'] = []
     last_job_id = None
     end = False
+    iterations = 0
     while not end:
+        iterations += 1
+
+        if iterations > 1 and iterations % 5 == 0:
+            logging.info(f'On {iterations} iteration to load jobs for {batch["id"]}')
+
         q = ''
         if last_job_id:
             q = f'?last_job_id={last_job_id}'
@@ -150,31 +178,172 @@ def fill_batch_jobs(batch: dict, token: str):
     return batch
 
 
-def finalise_batch_cost(batch: dict) -> float:
-    """
-    Calculate the cost of a batch from the job aggregated resources
-    No filtering is done on attributes here.
-    """
-    raise NotImplementedError
+CACHED_CURRENCY_CONVERSION: Dict[str, float] = {}
 
 
-def main(request=None):
+def get_currency_conversion_rate_for_time(time: datetime):
+    """
+    Get the currency conversion rate for a given time.
+    Noting that GCP conversion rates are decided at the start of the month,
+    and apply to each job that starts within the month, regardless of when
+    the job finishes.
+    """
+    global CACHED_CURRENCY_CONVERSION
+
+    key = str(time.date())
+    if key not in CACHED_CURRENCY_CONVERSION:
+        logging.warn(f'Looking up currency conversion rate for {key}')
+        query = f"""
+            SELECT currency_conversion_rate
+            FROM {GCP_BILLING_BQ_TABLE}
+            WHERE DATE(_PARTITIONTIME) = DATE('{time.date()}')
+            LIMIT 1
+        """
+        for r in bigquery_client.query(query).result():
+            CACHED_CURRENCY_CONVERSION[key] = r['currency_conversion_rate']
+
+    return CACHED_CURRENCY_CONVERSION[key]
+
+
+def get_usd_cost_for_resource(batch_resource, usage):
+    """
+    Get the cost of a resource in USD.
+    """
+    # TODO: fix these costs, they're the ones from hail directory
+    return {
+        "boot-disk/pd-ssd/1": 0.0000000000000631286124420108,
+        "compute/n1-nonpreemptible/1": 0.00000000000878083333333334,
+        "compute/n1-preemptible/1": 0.00000000000184861111111111,
+        "disk/local-ssd/1": 0.0000000000000178245493953913,
+        "disk/pd-ssd/1": 0.0000000000000631286124420108,
+        "ip-fee/1024/1": 0.00000000000108506944444444,
+        "memory/n1-nonpreemptible/1": 0.00000000000114935980902778,
+        "memory/n1-preemptible/1": 0.000000000000241970486111111,
+        "service-fee/1": 0.00000000000277777777777778,
+    }[batch_resource] * usage
+
+
+def get_unit_for_batch_resource_type(batch_resource_type: str) -> str:
+    return {
+        "boot-disk/pd-ssd/1": "GB/ms",
+        "disk/local-ssd/1": "GB/ms",
+        "disk/pd-ssd/1": "GB/ms",
+        "compute/n1-nonpreemptible/1": "cpu/ms",
+        "compute/n1-preemptible/1": 'cpu/ms',
+        "ip-fee/1024/1": 'IPs/ms',
+        "memory/n1-nonpreemptible/1": 'GB/ms',
+        "memory/n1-preemptible/1": 'GB/ms',
+        "service-fee/1": '$/ms',
+    }.get(batch_resource_type, batch_resource_type)
+
+
+def get_finalised_entries_for_batch(dataset, batch: dict) -> List[Dict]:
+    entries = []
+
+    start_time = parse_hail_time(batch['time_created'])
+    end_time = parse_hail_time(batch['time_completed'])
+
+    resource_usage = defaultdict(float)
+    currency_conversion_rate = get_currency_conversion_rate_for_time(start_time)
+    for job in batch['jobs']:
+        if not job['resources']:
+            continue
+        for batch_resource, usage in job['resources'].items():
+            # batch_resource is one of ['cpu', 'memory', 'disk']
+
+            resource_usage[batch_resource] += usage
+
+    for batch_resource, usage in resource_usage.items():
+        key = f'hail-{dataset}-batch-{batch["id"]}'
+
+        labels = [
+            {'name': 'dataset', 'value': dataset},
+            {'name': 'url', 'value': UI_URL.replace('{batch_id}', str(batch['id']))},
+        ]
+        name = batch.get('attributes', {}).get('name')
+        if name:
+            labels.append({'name': 'name', 'value': name})
+        # batch_resource is one of ['cpu', 'memory', 'disk']
+
+        cost = currency_conversion_rate * get_usd_cost_for_resource(
+            batch_resource, usage
+        )
+
+        entries.append(
+            {
+                "id": key,
+                "dataset": dataset,
+                "service": {
+                    "id": key,
+                    "description": 'Hail compute',
+                },
+                "sku": {
+                    "id": f'hail-{batch_resource}',
+                    "description": f'{batch_resource} usage',
+                },
+                "usage_start_time": start_time,
+                "usage_end_time": end_time,
+                'project': None,
+                "labels": labels,
+                "system_labels": [],
+                "location": {
+                    "location": 'australia-southeast1',
+                    "country": 'Australia',
+                    "region": 'australia',
+                    "zone": None,
+                },
+                "export_time": datetime.now(),
+                "cost": cost,
+                "currency": "AUD",
+                "currency_conversion_rate": currency_conversion_rate,
+                "usage": {
+                    "amount": usage,
+                    "unit": get_unit_for_batch_resource_type(batch_resource),
+                    "amount_in_pricing_units": cost,
+                    "pricing_unit": "AUD",
+                },
+                # 'credits': [],
+                "invoice": {"month": f'{start_time.month}{start_time.year}'},
+                "cost_type": "regular",
+                'adjustment_info': None,
+            }
+        )
+
+    return entries
+
+
+def from_request(request):
+    main()
+
+
+def main(start: datetime = None, end: datetime = None):
     """Main body function"""
-    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-    end_day = today - timedelta(days=1)
-    start_day = end_day - timedelta(days=1)
-    if request:
-        start_day = request.start_day
-        end_day = request.end_day
+
+    if not start:
+        start = datetime.now().replace(
+            hour=0, minute=0, second=0, microsecond=0
+        ) - timedelta(days=2)
+    if not end:
+        end = datetime.now()
+
+    assert isinstance(start, datetime) and isinstance(end, datetime)
 
     token = get_hail_token()
+    entries = []
     for bp in get_billing_projects():
-        batches = get_finished_batches_for_date(bp, start_day, end_day, token)
+        batches = get_finished_batches_for_date(bp, start, end, token)
+        batches = [b for b in batches if '...' not in b['attributes']['name']]
+        logging.info(f'{bp} :: Filling in information for {len(batches)} batches')
 
         for batch in batches:
             fill_batch_jobs(batch, token)
-        print(json.dumps(batches, indent=4))
+            entries.extend(get_finalised_entries_for_batch(bp, batch))
+
+    df = pd.DataFrame.from_records(entries)
+
+    # Insert new rows into aggregation table
+    insert_new_rows_in_table(client=bigquery_client, table=GCP_DEST_TABLE, df=df)
 
 
 if __name__ == '__main__':
-    main()
+    main(start=datetime(2022, 5, 2), end=datetime(2022, 5, 5))
