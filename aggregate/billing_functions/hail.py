@@ -30,6 +30,8 @@ Tasks:
     - And maybe only sync "settled" jobs within datetimes
         (ie: finished between START + END of previous time period)
 """
+import math
+import asyncio
 import logging
 import json
 from collections import defaultdict
@@ -39,13 +41,14 @@ from typing import Dict, List
 from cpg_utils.cloud import read_secret
 
 from utils import (
+    chunk,
     insert_new_rows_in_table,
     get_currency_conversion_rate_for_time,
     get_unit_for_batch_resource_type,
     get_usd_cost_for_resource,
     get_finished_batches_for_date,
     get_hail_token,
-    fill_batch_jobs,
+    get_jobs_for_batch,
     parse_hail_time,
     to_bq_time,
     HAIL_UI_URL,
@@ -155,10 +158,10 @@ def get_finalised_entries_for_batch(dataset, batch: dict) -> List[Dict]:
 
 
 def from_request(request):
-    main()
+    asyncio.get_event_loop().run_until_complete(main())
 
 
-def main(start: datetime = None, end: datetime = None):
+async def main(start: datetime = None, end: datetime = None):
     """Main body function"""
 
     if not start:
@@ -171,20 +174,40 @@ def main(start: datetime = None, end: datetime = None):
     assert isinstance(start, datetime) and isinstance(end, datetime)
 
     token = get_hail_token()
-    entries = []
-    for bp in get_billing_projects():
-        logging.info(f'{bp} :: loading batches')
-        batches = get_finished_batches_for_date(bp, start, end, token)
-        # batches = [b for b in batches if '...' not in b['attributes']['name']]
-        logging.info(f'{bp} :: Filling in information for {len(batches)} batches')
-
-        for batch in batches:
-            fill_batch_jobs(batch, token)
-            entries.extend(get_finalised_entries_for_batch(bp, batch))
-
+    promises = [
+        get_entries_for_billing_project(bp, start, end, token)
+        for bp in get_billing_projects()
+    ]
+    entries_nested = await asyncio.gather(*promises)
+    entries = [entry for entry_list in entries_nested for entry in entry_list]
     # Insert new rows into aggregation table
     insert_new_rows_in_table(table=GCP_DEST_TABLE, obj=entries)
 
 
+async def get_entries_for_billing_project(bp, start, end, token):
+    entries = []
+    logging.info(f'{bp} :: loading batches')
+    batches = await get_finished_batches_for_date(bp, start, end, token)
+    if len(batches) == 0:
+        return []
+    # batches = [b for b in batches if '...' not in b['attributes']['name']]
+    logging.info(f'{bp} :: Filling in information for {len(batches)} batches')
+    jobs_in_batch = []
+    for chnk, btch_grp in enumerate(chunk(batches, 100)):
+        if len(batches) > 100:
+            logging.info(
+                f'{bp} :: Getting jobs for chunk {chnk+1}/{math.ceil(len(batches)/100)}'
+            )
+        promises = [get_jobs_for_batch(b['id'], token) for b in btch_grp]
+        jobs_in_batch.extend(await asyncio.gather(*promises))
+    for batch, jobs in zip(batches, jobs_in_batch):
+        batch['jobs'] = jobs
+        entries.extend(get_finalised_entries_for_batch(bp, batch))
+
+    return entries
+
+
 if __name__ == '__main__':
-    main(start=datetime(2022, 5, 2), end=datetime(2022, 5, 5))
+    asyncio.get_event_loop().run_until_complete(
+        main(start=datetime(2022, 5, 2), end=datetime(2022, 5, 5))
+    )

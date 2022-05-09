@@ -2,17 +2,16 @@ import os
 from collections import defaultdict
 import json
 import logging
-
-from typing import Dict, List, Any
+from datetime import datetime
+from io import StringIO
 from pathlib import Path
+from typing import Dict, List, Any, Iterator, Sequence, TypeVar
 
-import requests
+import aiohttp
 import pandas as pd
 
-from datetime import datetime
 import google.cloud.bigquery as bq
-from google.api_core.exceptions import BadRequest, ClientError
-from io import StringIO
+from google.api_core.exceptions import ClientError
 
 logging.basicConfig(level=logging.INFO)
 
@@ -32,6 +31,15 @@ HAIL_JOBS_API = HAIL_BASE + '/api/v1alpha/batches/{batch_id}/jobs/resources'
 
 
 bigquery_client = bq.Client()
+T = TypeVar('T')
+
+
+def chunk(iterable: Sequence[T], chunk_size=50) -> Iterator[Sequence[T]]:
+    """
+    Chunk a sequence by yielding lists of `chunk_size`
+    """
+    for i in range(0, len(iterable), chunk_size):
+        yield iterable[i : i + chunk_size]
 
 
 def get_schema_json():
@@ -79,7 +87,7 @@ def get_hail_token():
         return config['default']
 
 
-def get_batches(billing_project: str, last_batch_id: any, token: str):
+async def get_batches(billing_project: str, last_batch_id: any, token: str):
     """
     Get list of batches for a billing project with no filtering.
     (Optional): from last_batch_id
@@ -88,15 +96,16 @@ def get_batches(billing_project: str, last_batch_id: any, token: str):
     if last_batch_id:
         q += f'&last_batch_id={last_batch_id}'
 
-    response = requests.get(
-        HAIL_BATCHES_API + q, headers={'Authorization': 'Bearer ' + token}
-    )
-    response.raise_for_status()
+    async with aiohttp.ClientSession() as session:
+        async with session.get(
+            HAIL_BATCHES_API + q, headers={'Authorization': 'Bearer ' + token}
+        ) as resp:
+            resp.raise_for_status()
 
-    return response.json()
+            return await resp.json()
 
 
-def get_finished_batches_for_date(
+async def get_finished_batches_for_date(
     billing_project: str, start_day: datetime, end_day: datetime, token: str
 ):
     """
@@ -112,7 +121,7 @@ def get_finished_batches_for_date(
     while True:
 
         n_requests += 1
-        jresponse = get_batches(billing_project, last_batch_id, token)
+        jresponse = await get_batches(billing_project, last_batch_id, token)
 
         if 'last_batch_id' in jresponse and jresponse['last_batch_id'] == last_batch_id:
             raise ValueError(
@@ -131,7 +140,7 @@ def get_finished_batches_for_date(
 
             if time_completed < start_day:
                 logging.info(
-                    f'Got batches in {n_requests} requests, skipping {skipped}'
+                    f'{billing_project} :: Got batches in {n_requests} requests, skipping {skipped}'
                 )
                 return batches
             if in_date_range:
@@ -140,39 +149,42 @@ def get_finished_batches_for_date(
                 skipped += 1
 
 
-def fill_batch_jobs(batch: dict, token: str):
+async def get_jobs_for_batch(batch_id, token: str) -> List[str]:
     """
     For a single batch, fill in the "jobs" field.
 
     TODO: use new endpoint with billing info
     """
-    batch['jobs'] = []
+    jobs = []
     last_job_id = None
     end = False
     iterations = 0
-    while not end:
-        iterations += 1
+    async with aiohttp.ClientSession() as client:
+        while not end:
+            iterations += 1
 
-        if iterations > 1 and iterations % 5 == 0:
-            logging.info(f'On {iterations} iteration to load jobs for {batch["id"]}')
+            if iterations > 1 and iterations % 5 == 0:
+                logging.info(f'On {iterations} iteration to load jobs for {batch_id}')
 
-        q = '?limit=9999'
-        if last_job_id:
-            q += f'&last_job_id={last_job_id}'
-        url = HAIL_JOBS_API.format(batch_id=batch['id']) + q
-        response = requests.get(url, headers={'Authorization': 'Bearer ' + token})
-        response.raise_for_status()
+            q = '?limit=9999'
+            if last_job_id:
+                q += f'&last_job_id={last_job_id}'
+            url = HAIL_JOBS_API.format(batch_id=batch_id) + q
+            async with client.get(
+                url, headers={'Authorization': 'Bearer ' + token}
+            ) as response:
+                response.raise_for_status()
 
-        jresponse = response.json()
-        new_last_job_id = jresponse.get('last_job_id')
-        if new_last_job_id is None:
-            end = True
-        elif last_job_id and new_last_job_id <= last_job_id:
-            raise ValueError('Something fishy with last job id')
-        last_job_id = new_last_job_id
-        batch['jobs'].extend(jresponse['jobs'])
+                jresponse = await response.json()
+                new_last_job_id = jresponse.get('last_job_id')
+                if new_last_job_id is None:
+                    end = True
+                elif last_job_id and new_last_job_id <= last_job_id:
+                    raise ValueError('Something fishy with last job id')
+                last_job_id = new_last_job_id
+                jobs.extend(jresponse['jobs'])
 
-    return batch
+    return jobs
 
 
 def insert_new_rows_in_table(table: str, obj: List[Dict[str, Any]]):
