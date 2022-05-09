@@ -20,7 +20,7 @@ import logging
 from datetime import datetime, timedelta
 from google.cloud import bigquery
 from cpg_utils.cloud import read_secret
-from .utils import insert_new_rows_in_table
+from .utils import insert_dataframe_rows_in_table
 
 logging.basicConfig(level=logging.INFO)
 
@@ -70,12 +70,7 @@ def main(request=None):
     # Remove billing account id
     migrate_rows = migrate_rows.drop(columns=['billing_account_id'])
 
-    result = insert_new_rows_in_table(
-        bigquery_client,
-        DESTINATION_TABLE,
-        migrate_rows,
-        (start_day, end_day),
-    )
+    result = insert_dataframe_rows_in_table(DESTINATION_TABLE, migrate_rows)
 
     return result
 

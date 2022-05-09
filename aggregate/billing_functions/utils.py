@@ -7,6 +7,7 @@ from typing import Dict, List, Any
 from pathlib import Path
 
 import requests
+import pandas as pd
 
 from datetime import datetime
 import google.cloud.bigquery as bq
@@ -229,6 +230,42 @@ def insert_new_rows_in_table(table: str, obj: List[Dict[str, Any]]):
         raise e
 
     return filtered_obj
+
+
+def insert_dataframe_rows_in_table(table: str, df: pd.DataFrame):
+    """Insert new rows into a table"""
+
+    _query = f"""
+        SELECT id FROM `{table}`
+        WHERE id IN UNNEST(@ids);
+    """
+    job_config = bq.QueryJobConfig(
+        query_parameters=[
+            bq.ArrayQueryParameter('ids', 'STRING', list(set(df['id']))),
+        ]
+    )
+    result = bigquery_client.query(_query, job_config=job_config).result()
+    existing_ids = set(result.to_dataframe()['id'])
+
+    # Filter out any rows that are already in the table
+    df = df[~df['id'].isin(existing_ids)]
+
+    # Count number of rows adding
+    adding_rows = len(df)
+
+    # Insert the new rows
+    project_id = table.split('.')[0]
+    table_schema = get_formatted_schema()
+
+    df.to_gbq(
+        table,
+        project_id=project_id,
+        table_schema=table_schema,
+        if_exists='append',
+    )
+
+    logging.info(f"{adding_rows} new rows inserted")
+    return adding_rows
 
 
 CACHED_CURRENCY_CONVERSION: Dict[str, float] = {}
