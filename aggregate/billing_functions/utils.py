@@ -307,33 +307,72 @@ def get_currency_conversion_rate_for_time(time: datetime):
     return CACHED_CURRENCY_CONVERSION[key]
 
 
-def get_usd_cost_for_resource(batch_resource, usage):
+def _generate_hail_resource_cost_lookup():
+    """
+    Generate the cost table for the hail resources.
+    This is currently set to the australia-southeast-1 region.
+    """
+    from hailtop.utils import (
+        rate_gib_hour_to_mib_msec,
+        rate_gib_month_to_mib_msec,
+        rate_cpu_hour_to_mcpu_msec,
+        rate_instance_hour_to_fraction_msec,
+    )
+
+    rates = [
+        # https://cloud.google.com/compute/vm-instance-pricing#:~:text=N1%20custom%20vCPUs,that%20machine%20type.
+        ('compute/n1-preemptible/1', rate_cpu_hour_to_mcpu_msec(0.00898)),
+        ('compute/n1-nonpreemptible/1', rate_cpu_hour_to_mcpu_msec(0.04488)),
+        ('memory/n1-preemptible/1', rate_gib_hour_to_mib_msec(0.00120)),
+        ('memory/n1-nonpreemptible/1', rate_gib_hour_to_mib_msec(0.00601)),
+        # https://cloud.google.com/compute/disks-image-pricing#persistentdisk
+        ('boot-disk/pd-ssd/1', rate_gib_month_to_mib_msec(0.23)),
+        ('disk/pd-ssd/1', rate_gib_month_to_mib_msec(0.065)),
+        # https://cloud.google.com/compute/disks-image-pricing#localssdpricing
+        ('disk/local-ssd/1', rate_gib_month_to_mib_msec(0.23)),
+        # https://cloud.google.com/vpc/network-pricing#:~:text=internal%20IP%20addresses.-,External%20IP%20address%20pricing,to%0Athe%20following%20table.,-If%20you%20reserve
+        ('ip-fee/1024/1', rate_instance_hour_to_fraction_msec(0.004, 1024)),
+        # custom Hail Batch service fee?
+        ('service-fee/1', rate_cpu_hour_to_mcpu_msec(0.01)),
+    ]
+    s = json.dumps(dict(rates))
+    print(s)
+    return s
+
+
+AUSTRALIA_SOUTHEAST_1_COST = {
+    "compute/n1-preemptible/1": 2.4944444444444447e-12,
+    "compute/n1-nonpreemptible/1": 1.2466666666666668e-11,
+    "memory/n1-preemptible/1": 3.255208333333333e-13,
+    "memory/n1-nonpreemptible/1": 1.6303168402777778e-12,
+    "boot-disk/pd-ssd/1": 8.540929918624991e-14,
+    "disk/pd-ssd/1": 2.4137410639592365e-14,
+    "disk/local-ssd/1": 8.540929918624991e-14,
+    "ip-fee/1024/1": 1.0850694444444444e-12,
+    "service-fee/1": 2.777777777777778e-12,
+}
+
+
+def get_usd_cost_for_resource(batch_resource, usage, region='australia-southeast-1'):
     """
     Get the cost of a resource in USD.
     """
-    # TODO: fix these costs, they're the ones from hail directory
-    return {
-        "boot-disk/pd-ssd/1": 0.0000000000000631286124420108,
-        "compute/n1-nonpreemptible/1": 0.00000000000878083333333334,
-        "compute/n1-preemptible/1": 0.00000000000184861111111111,
-        "disk/local-ssd/1": 0.0000000000000178245493953913,
-        "disk/pd-ssd/1": 0.0000000000000631286124420108,
-        "ip-fee/1024/1": 0.00000000000108506944444444,
-        "memory/n1-nonpreemptible/1": 0.00000000000114935980902778,
-        "memory/n1-preemptible/1": 0.000000000000241970486111111,
-        "service-fee/1": 0.00000000000277777777777778,
-    }[batch_resource] * usage
+    regions = {
+        'australia-southeast-1': AUSTRALIA_SOUTHEAST_1_COST,
+    }
+
+    return regions[region][batch_resource] * usage
 
 
 def get_unit_for_batch_resource_type(batch_resource_type: str) -> str:
     return {
-        "boot-disk/pd-ssd/1": "GB/ms",
-        "disk/local-ssd/1": "GB/ms",
-        "disk/pd-ssd/1": "GB/ms",
-        "compute/n1-nonpreemptible/1": "cpu/ms",
-        "compute/n1-preemptible/1": 'cpu/ms',
-        "ip-fee/1024/1": 'IPs/ms',
-        "memory/n1-nonpreemptible/1": 'GB/ms',
-        "memory/n1-preemptible/1": 'GB/ms',
-        "service-fee/1": '$/ms',
+        "boot-disk/pd-ssd/1": "mib * msec",
+        "disk/local-ssd/1": "mib * msec",
+        "disk/pd-ssd/1": "mb * msec",
+        "compute/n1-nonpreemptible/1": "mcpu * msec",
+        "compute/n1-preemptible/1": 'mcpu * msec',
+        "ip-fee/1024/1": 'IP * msec',
+        "memory/n1-nonpreemptible/1": 'mib * msec',
+        "memory/n1-preemptible/1": 'mib * msec',
+        "service-fee/1": '$/msec',
     }.get(batch_resource_type, batch_resource_type)
