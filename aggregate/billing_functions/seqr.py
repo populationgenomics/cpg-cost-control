@@ -40,11 +40,8 @@ from google.cloud import bigquery
 import sample_metadata as sm
 
 
-from utils import (
+from .utils import (
     logger,
-    HAIL_UI_URL,
-    SERVICE_FEE,
-    ANALYSIS_RUNNER_PROJECT_ID,
     get_currency_conversion_rate_for_time,
     get_unit_for_batch_resource_type,
     get_usd_cost_for_resource,
@@ -57,7 +54,7 @@ from utils import (
     to_bq_time,
     parse_hail_time,
     insert_new_rows_in_table,
-    GCP_DEST_TABLE,
+    GCP_AGGREGATE_DEST_TABLE,
 )
 
 SERVICE_ID = 'seqr'
@@ -207,7 +204,7 @@ async def main(start: datetime = None, end: datetime = None):
                 )
 
     # Insert new rows into aggregation table
-    insert_new_rows_in_table(table=GCP_DEST_TABLE, obj=entry_items)
+    insert_new_rows_in_table(table=GCP_AGGREGATE_DEST_TABLE, obj=entry_items)
 
 
 def get_key_from_batch_job(batch, job, batch_resource):

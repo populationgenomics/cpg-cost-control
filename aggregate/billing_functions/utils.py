@@ -25,8 +25,9 @@ logger = logging
 GCP_BILLING_BQ_TABLE = (
     'billing-admin-290403.billing.gcp_billing_export_v1_01D012_20A6A2_CBD343'
 )
-GCP_AGGREGATE_DEST_TABLE = os.getenv('CPG_BILLING_AGGREGATE_TABLE')
-assert GCP_AGGREGATE_DEST_TABLE
+GCP_AGGREGATE_DEST_TABLE = os.getenv('GCP_AGGREGATE_DEST_TABLE')
+logging.info('GCP_AGGREGATE_DEST_TABLE: {}'.format(GCP_AGGREGATE_DEST_TABLE))
+# assert GCP_AGGREGATE_DEST_TABLE
 
 # 10% overhead
 SERVICE_FEE = 0.05
@@ -284,7 +285,7 @@ def insert_dataframe_rows_in_table(table: str, df: pd.DataFrame):
 
     # Insert the new rows
     project_id = table.split('.')[0]
-    table_schema = get_formatted_bq_schema()
+    table_schema = get_bq_schema_json()
 
     df.to_gbq(
         table,
@@ -414,6 +415,16 @@ def get_start_and_end_from_request(
     """
     if request:
         return request.params['start'], request.params['end']
+    return (None, None)
+
+
+def get_start_and_end_from_data(data) -> Tuple[Optional[datetime], Optional[datetime]]:
+    """
+    Get the start and end times from the cloud function data.
+    """
+    if data:
+        logging.info("DATA:", data)
+        return data['start'], data['end']
     return (None, None)
 
 

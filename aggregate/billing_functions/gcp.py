@@ -23,16 +23,16 @@ from cpg_utils.cloud import read_secret
 
 from .utils import (
     bigquery_client,
+    get_start_and_end_from_data,
     insert_dataframe_rows_in_table,
     get_start_and_end_from_request,
     process_default_start_and_end,
+    GCP_BILLING_BQ_TABLE,
+    GCP_AGGREGATE_DEST_TABLE,
+    ANALYSIS_RUNNER_PROJECT_ID,
 )
 
 logging.basicConfig(level=logging.INFO)
-
-ANALYSIS_RUNNER_PROJECT_ID = 'analysis-runner'
-SOURCE_TABLE = 'billing-admin-290403.billing.gcp_billing_export_v1_01D012_20A6A2_CBD343'
-DESTINATION_TABLE = 'sabrina-dev-337923.billing.aggregate'
 
 
 def from_request(request):
@@ -40,6 +40,14 @@ def from_request(request):
     From request object, get start and end time if present
     """
     start, end = get_start_and_end_from_request(request)
+    main(start, end)
+
+
+def from_pubsub(data=None, context=None):
+    """
+    From pubsub message, get start and end time if present
+    """
+    start, end = get_start_and_end_from_data(data)
     main(start, end)
 
 
@@ -58,9 +66,9 @@ def main(start: datetime = None, end: datetime = None) -> int:
     # Get the billing date in the time period
     # Filter out any rows that aren't in the allowed project ids
     _query = f"""
-        SELECT * FROM `{SOURCE_TABLE}`
-        WHERE usage_end_time >= '{start.isoformat()}'
-            AND usage_end_time < '{end.isoformat()}'
+        SELECT * FROM `{GCP_BILLING_BQ_TABLE}`
+        WHERE export_time >= '{start.isoformat()}'
+            AND export_time < '{end.isoformat()}'
             AND project.id IN ({allowed_project_ids})
     """
 
@@ -77,7 +85,7 @@ def main(start: datetime = None, end: datetime = None) -> int:
     # Remove billing account id
     migrate_rows = migrate_rows.drop(columns=['billing_account_id'])
 
-    result = insert_dataframe_rows_in_table(DESTINATION_TABLE, migrate_rows)
+    result = insert_dataframe_rows_in_table(GCP_AGGREGATE_DEST_TABLE, migrate_rows)
 
     return result
 

@@ -1,4 +1,4 @@
-from .gcp import main as gcp
+from .gcp import from_pubsub as gcp
 from .hail import main as hail
 from .seqr import main as seqr
 

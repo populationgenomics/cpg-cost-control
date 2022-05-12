@@ -5,3 +5,4 @@ config:
     - gcp
     - hail
     - seqr
+  opts:destination: sabrina-dev-337923.billing.aggregate

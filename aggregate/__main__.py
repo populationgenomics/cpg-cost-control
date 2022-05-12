@@ -16,7 +16,7 @@ import pulumi
 
 import pulumi_gcp as gcp
 
-from base64 import b64encode, b64decode
+from base64 import b64encode
 
 # Disable rule for that module-level exports be ALL_CAPS, for legibility.
 # pylint: disable=C0103
@@ -25,11 +25,14 @@ from base64 import b64encode, b64decode
 PATH_TO_SOURCE_CODE = './'
 
 # Get values from Pulumi config to use as environment variables in our Cloud Function.
-config = pulumi.Config(name='gcp')
+gcp_opts = pulumi.Config(name='gcp')
+opts = pulumi.Config(name='opts')
 
 config_values = {
-    'PROJECT': config.get('project'),
-    'REGION': config.get('region'),
+    'PROJECT': gcp_opts.get('project'),
+    'REGION': gcp_opts.get('region'),
+    'GCP_AGGREGATE_DEST_TABLE': opts.get('destination'),
+    'FUNCTIONS': opts.get('functions'),
 }
 
 name = 'aggregate-cloud-functions'
@@ -89,6 +92,9 @@ def create_cloud_function(
         event_type="google.pubsub.topic.publish", resource=pubsub_topic.name
     )
 
+    env = {
+        'GCP_AGGREGATE_DEST_TABLE': config_values['GCP_AGGREGATE_DEST_TABLE'],
+    }
     fxn = gcp.cloudfunctions.Function(
         f"{name}-billing-function",
         entry_point=f'{name}',
@@ -98,6 +104,8 @@ def create_cloud_function(
         source_archive_object=source_archive_object.name,
         project=config_values['PROJECT'],
         region=config_values['REGION'],
+        build_environment_variables=env,
+        environment_variables=env,
         opts=pulumi.ResourceOptions(
             depends_on=[function_bucket, source_archive_object, pubsub_topic]
         ),
@@ -113,7 +121,7 @@ def create_cloud_function(
 
 # Create the Cloud Function, deploying the source we just uploaded to Google
 # Cloud Storage.
-functions = ast.literal_eval(pulumi.Config(name='opts').get('functions'))
+functions = ast.literal_eval(config_values['FUNCTIONS'])
 
 # Deploy all functions
 pulumi.export('bucket_name', function_bucket.url)
@@ -128,7 +136,6 @@ for function in functions:
     )
 
     pulumi.export(f'{function}_fxn_name', fxn.name)
-    pulumi.export(f'{function}_fxn_url', fxn.https_trigger_url)
 
 
 def b64encode_str(s: str) -> str:
