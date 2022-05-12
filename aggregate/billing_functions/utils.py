@@ -1,11 +1,15 @@
+# pyliny: disable=global-statement
+"""
+Class of helper functions for billing aggregate functions
+"""
 import os
-from collections import defaultdict
 import json
 import logging
-from datetime import datetime
+from collections import defaultdict
+from datetime import datetime, timedelta
 from io import StringIO
 from pathlib import Path
-from typing import Dict, List, Any, Iterator, Sequence, TypeVar
+from typing import Dict, List, Any, Iterator, Optional, Sequence, Tuple, TypeVar
 
 import aiohttp
 import pandas as pd
@@ -15,12 +19,17 @@ from google.api_core.exceptions import ClientError
 
 logging.basicConfig(level=logging.INFO)
 
+# fix this later to be a proper configured logger
+logger = logging
+
 GCP_BILLING_BQ_TABLE = (
     'billing-admin-290403.billing.gcp_billing_export_v1_01D012_20A6A2_CBD343'
 )
+GCP_AGGREGATE_DEST_TABLE = os.getenv('CPG_BILLING_AGGREGATE_TABLE')
+assert GCP_AGGREGATE_DEST_TABLE
 
 # 10% overhead
-SERVICE_FEE = 0.1
+SERVICE_FEE = 0.05
 ANALYSIS_RUNNER_PROJECT_ID = 'analysis-runner'
 
 
@@ -31,6 +40,7 @@ HAIL_JOBS_API = HAIL_BASE + '/api/v1alpha/batches/{batch_id}/jobs/resources'
 
 
 bigquery_client = bq.Client()
+# pyliny: disable=invalid-name
 T = TypeVar('T')
 
 
@@ -42,7 +52,7 @@ def chunk(iterable: Sequence[T], chunk_size=50) -> Iterator[Sequence[T]]:
         yield iterable[i : i + chunk_size]
 
 
-def get_schema_json():
+def get_bq_schema_json():
     """Get the schema for the table"""
     pwd = Path(__file__).parent.parent.resolve()
     schema_path = pwd / 'schema' / 'aggregate_schema.json'
@@ -50,7 +60,9 @@ def get_schema_json():
         return json.load(f)
 
 
-def format_schema(schema):
+def _format_bq_schema_json(schema: Dict[str, Any]):
+    """
+    Take bq json schema, and convert it to bq.SchemaField objects"""
     formatted_schema = []
     for row in schema:
         kwargs = {
@@ -60,20 +72,25 @@ def format_schema(schema):
         }
 
         if 'fields' in row and row['fields']:
-            kwargs['fields'] = format_schema(row['fields'])
+            kwargs['fields'] = _format_bq_schema_json(row['fields'])
         formatted_schema.append(bq.SchemaField(**kwargs))
     return formatted_schema
 
 
-def get_formatted_schema():
-    return format_schema(get_schema_json())
+def get_formatted_bq_schema() -> List[bq.SchemaField]:
+    """
+    Get schema for bigquery billing table, as a list of bq.SchemaField objects
+    """
+    return _format_bq_schema_json(get_bq_schema_json())
 
 
 def parse_hail_time(time_str: str) -> datetime:
+    """Parse hail datetime object"""
     return datetime.strptime(time_str, '%Y-%m-%dT%H:%M:%SZ')
 
 
 def to_bq_time(time: datetime):
+    """Convert datetime to transport datetime for bigquery"""
     return time.strftime('%Y-%m-%d %H:%M:%S')
 
 
@@ -136,11 +153,12 @@ async def get_finished_batches_for_date(
                 continue
 
             time_completed = parse_hail_time(b['time_completed'])
-            in_date_range = time_completed >= start_day and time_completed < end_day
+            in_date_range = start_day <= time_completed < end_day
 
             if time_completed < start_day:
                 logging.info(
-                    f'{billing_project} :: Got batches in {n_requests} requests, skipping {skipped}'
+                    f'{billing_project} :: Got {len(batches)} batches '
+                    f'in {n_requests} requests, skipping {skipped}'
                 )
                 return batches
             if in_date_range:
@@ -151,9 +169,7 @@ async def get_finished_batches_for_date(
 
 async def get_jobs_for_batch(batch_id, token: str) -> List[str]:
     """
-    For a single batch, fill in the "jobs" field.
-
-    TODO: use new endpoint with billing info
+    For a single batch, fill in the 'jobs' field.
     """
     jobs = []
     last_job_id = None
@@ -188,13 +204,13 @@ async def get_jobs_for_batch(batch_id, token: str) -> List[str]:
 
 
 def insert_new_rows_in_table(table: str, obj: List[Dict[str, Any]]):
-    """Insert new rows into a table"""
+    """Insert JSON rows into a BQ table"""
 
     _query = f"""
         SELECT id FROM `{table}`
         WHERE id IN UNNEST(@ids);
     """
-    # ids = df['id']
+
     ids = set(o['id'] for o in obj)
     if len(ids) != len(obj):
         counter = defaultdict(int)
@@ -222,12 +238,12 @@ def insert_new_rows_in_table(table: str, obj: List[Dict[str, Any]]):
         return []
 
     # Count number of rows adding
-    logging.info(f"Inserting {len(filtered_obj)}/{len(obj)} rows")
+    logging.info(f'Inserting {len(filtered_obj)}/{len(obj)} rows')
 
     # Insert the new rows
     job_config = bq.LoadJobConfig()
     job_config.source_format = bq.SourceFormat.NEWLINE_DELIMITED_JSON
-    job_config.schema = get_formatted_schema()
+    job_config.schema = get_formatted_bq_schema()
 
     j = '\n'.join(json.dumps(o) for o in filtered_obj)
 
@@ -237,6 +253,7 @@ def insert_new_rows_in_table(table: str, obj: List[Dict[str, Any]]):
     try:
         result = resp.result()
         logging.info(str(result))
+        logging.info(f'Inserted {result.output_rows} rows')
     except ClientError as e:
         logging.error(resp.errors)
         raise e
@@ -245,7 +262,7 @@ def insert_new_rows_in_table(table: str, obj: List[Dict[str, Any]]):
 
 
 def insert_dataframe_rows_in_table(table: str, df: pd.DataFrame):
-    """Insert new rows into a table"""
+    """Insert new rows from dataframe into a table"""
 
     _query = f"""
         SELECT id FROM `{table}`
@@ -267,7 +284,7 @@ def insert_dataframe_rows_in_table(table: str, df: pd.DataFrame):
 
     # Insert the new rows
     project_id = table.split('.')[0]
-    table_schema = get_formatted_schema()
+    table_schema = get_formatted_bq_schema()
 
     df.to_gbq(
         table,
@@ -276,7 +293,7 @@ def insert_dataframe_rows_in_table(table: str, df: pd.DataFrame):
         if_exists='append',
     )
 
-    logging.info(f"{adding_rows} new rows inserted")
+    logging.info(f'{adding_rows} new rows inserted')
     return adding_rows
 
 
@@ -294,7 +311,7 @@ def get_currency_conversion_rate_for_time(time: datetime):
 
     key = f'{time.year}-{time.month}'
     if key not in CACHED_CURRENCY_CONVERSION:
-        logging.warn(f'Looking up currency conversion rate for {key}')
+        logging.info(f'Looking up currency conversion rate for {key}')
         query = f"""
             SELECT currency_conversion_rate
             FROM {GCP_BILLING_BQ_TABLE}
@@ -312,6 +329,7 @@ def _generate_hail_resource_cost_lookup():
     Generate the cost table for the hail resources.
     This is currently set to the australia-southeast-1 region.
     """
+    # pylint: disable=import-outside-toplevel
     from hailtop.utils import (
         rate_gib_hour_to_mib_msec,
         rate_gib_month_to_mib_msec,
@@ -327,9 +345,12 @@ def _generate_hail_resource_cost_lookup():
         ('memory/n1-nonpreemptible/1', rate_gib_hour_to_mib_msec(0.00601)),
         # https://cloud.google.com/compute/disks-image-pricing#persistentdisk
         ('boot-disk/pd-ssd/1', rate_gib_month_to_mib_msec(0.23)),
-        ('disk/pd-ssd/1', rate_gib_month_to_mib_msec(0.065)),
+        ('disk/pd-ssd/1', rate_gib_month_to_mib_msec(0.23)),
         # https://cloud.google.com/compute/disks-image-pricing#localssdpricing
-        ('disk/local-ssd/1', rate_gib_month_to_mib_msec(0.23)),
+        ('disk/local-ssd/preemptible/1', rate_gib_month_to_mib_msec(0.065)),
+        ('disk/local-ssd/nonpreemptible/1', rate_gib_month_to_mib_msec(0.108)),
+        # legacy local-ssd
+        ('disk/local-ssd/1', rate_gib_month_to_mib_msec(0.108)),
         # https://cloud.google.com/vpc/network-pricing#:~:text=internal%20IP%20addresses.-,External%20IP%20address%20pricing,to%0Athe%20following%20table.,-If%20you%20reserve
         ('ip-fee/1024/1', rate_instance_hour_to_fraction_msec(0.004, 1024)),
         # custom Hail Batch service fee?
@@ -341,15 +362,17 @@ def _generate_hail_resource_cost_lookup():
 
 
 AUSTRALIA_SOUTHEAST_1_COST = {
-    "compute/n1-preemptible/1": 2.4944444444444447e-12,
-    "compute/n1-nonpreemptible/1": 1.2466666666666668e-11,
-    "memory/n1-preemptible/1": 3.255208333333333e-13,
-    "memory/n1-nonpreemptible/1": 1.6303168402777778e-12,
-    "boot-disk/pd-ssd/1": 8.540929918624991e-14,
-    "disk/pd-ssd/1": 2.4137410639592365e-14,
-    "disk/local-ssd/1": 8.540929918624991e-14,
-    "ip-fee/1024/1": 1.0850694444444444e-12,
-    "service-fee/1": 2.777777777777778e-12,
+    'compute/n1-preemptible/1': 2.4944444444444447e-12,
+    'compute/n1-nonpreemptible/1': 1.2466666666666668e-11,
+    'memory/n1-preemptible/1': 3.255208333333333e-13,
+    'memory/n1-nonpreemptible/1': 1.6303168402777778e-12,
+    'boot-disk/pd-ssd/1': 8.540929918624991e-14,
+    'disk/pd-ssd/1': 8.540929918624991e-14,
+    'disk/local-ssd/preemptible/1': 2.4137410639592365e-14,
+    'disk/local-ssd/nonpreemptible/1': 4.010523613963039e-14,
+    'disk/local-ssd/1': 4.010523613963039e-14,
+    'ip-fee/1024/1': 1.0850694444444444e-12,
+    'service-fee/1': 2.777777777777778e-12,
 }
 
 
@@ -365,14 +388,44 @@ def get_usd_cost_for_resource(batch_resource, usage, region='australia-southeast
 
 
 def get_unit_for_batch_resource_type(batch_resource_type: str) -> str:
+    """
+    Get the relevant unit for some hail batch resource type
+    """
     return {
-        "boot-disk/pd-ssd/1": "mib * msec",
-        "disk/local-ssd/1": "mib * msec",
-        "disk/pd-ssd/1": "mb * msec",
-        "compute/n1-nonpreemptible/1": "mcpu * msec",
-        "compute/n1-preemptible/1": 'mcpu * msec',
-        "ip-fee/1024/1": 'IP * msec',
-        "memory/n1-nonpreemptible/1": 'mib * msec',
-        "memory/n1-preemptible/1": 'mib * msec',
-        "service-fee/1": '$/msec',
+        'boot-disk/pd-ssd/1': 'mib * msec',
+        'disk/local-ssd/preemptible/1': 'mib * msec',
+        'disk/local-ssd/nonpreemptible/1': 'mib * msec',
+        'disk/local-ssd/1': 'mib * msec',
+        'disk/pd-ssd/1': 'mb * msec',
+        'compute/n1-nonpreemptible/1': 'mcpu * msec',
+        'compute/n1-preemptible/1': 'mcpu * msec',
+        'ip-fee/1024/1': 'IP * msec',
+        'memory/n1-nonpreemptible/1': 'mib * msec',
+        'memory/n1-preemptible/1': 'mib * msec',
+        'service-fee/1': '$/msec',
     }.get(batch_resource_type, batch_resource_type)
+
+
+def get_start_and_end_from_request(
+    request,
+) -> Tuple[Optional[datetime], Optional[datetime]]:
+    """
+    Get the start and end times from the cloud function request.
+    """
+    if request:
+        return request.params['start'], request.params['end']
+    return (None, None)
+
+
+def process_default_start_and_end(start, end):
+    """Process start and end times (and get defaults)"""
+    if not start:
+        start = datetime.now().replace(
+            hour=0, minute=0, second=0, microsecond=0
+        ) - timedelta(days=2)
+    if not end:
+        end = datetime.now()
+
+    assert isinstance(start, datetime) and isinstance(end, datetime)
+
+    return start, end

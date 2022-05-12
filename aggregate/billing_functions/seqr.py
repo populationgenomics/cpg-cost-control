@@ -1,34 +1,64 @@
 """
-This cloud function runs WEEKLY, and distributes the cost of SEQR on the sample size within SEQR.
+This cloud function runs DAILY, and distributes the cost of
+SEQR on the sample size within SEQR.
 
 - It first pulls the cost of the seqr project (relevant components within it):
     - Elasticsearch, instance cost
     - Cost of loading data into seqr might be difficult:
         - At the moment this in dataproc, so covered by previous result
-        - Soon to move to Hail Query, which means we have to query hail to get the "cost of loading"
+        - Soon to move to Hail Query, which means we have to query hail
+            to get the 'cost of loading'
 - It determines the relative heuristic (of all projects loaded into seqr):
-    - EG: "relative size of GVCFs by project", eg:
-        - $DATASET has 12GB of GVCFs of a total 86GB of all seqr GVCFs, 
-        - therefore it's relative heuristic is 12/86 = 0.1395, and share of seqr cost is 13.95%
+    - EG: 'relative size of GVCFs by project', eg:
+        - $DATASET has 12GB of GVCFs of a total 86GB of all seqr GVCFs,
+        - therefore it's relative heuristic is 12/86 = 0.1395,
+            and share of seqr cost is 13.95%
 
 - Insert rows in aggregate cost table for each of these costs:
-    - The service.id should be "seqr" (or something similar)
+    - The service.id should be 'seqr' (or something similar)
     - Maybe the label could include the relative heuristic
+
+
+TO DO :
+
+- Add cram size to SM
+- Ensure getting latest joint call is split by sequence type,
+    or some other metric (exome vs genome)
+- Getting latest cram for sample by sequence type (eg: exome / genome)
 """
 
+from collections import defaultdict
 import os
+import math
 import json
-import logging
+from datetime import datetime, timedelta, timezone
+
+import asyncio
 import requests
 import pandas as pd
-
-from datetime import datetime, timedelta
 from google.cloud import bigquery
+import sample_metadata as sm
 
-from .utils import insert_new_rows_in_table
 
-
-logging.basicConfig(level=logging.INFO)
+from utils import (
+    logger,
+    HAIL_UI_URL,
+    SERVICE_FEE,
+    ANALYSIS_RUNNER_PROJECT_ID,
+    get_currency_conversion_rate_for_time,
+    get_unit_for_batch_resource_type,
+    get_usd_cost_for_resource,
+    get_finished_batches_for_date,
+    get_hail_token,
+    get_jobs_for_batch,
+    get_start_and_end_from_request,
+    process_default_start_and_end,
+    chunk,
+    to_bq_time,
+    parse_hail_time,
+    insert_new_rows_in_table,
+    GCP_DEST_TABLE,
+)
 
 SERVICE_ID = 'seqr'
 SEQR_HAIL_BILLING_PROJECT = 'seqr'
@@ -53,179 +83,58 @@ def get_datasets():
     return ['acute-care', 'perth-neuro']
 
 
-def get_hail_token():
+def get_sample_fractional_breakdown_by_dataset(time: datetime):
     """
-    Get Hail token from local tokens file
-    TODO: look at env var for deploy
+    Get the fractional breakdown of samples by dataset.
     """
-    with open(os.path.expanduser('~/.hail/tokens.json')) as f:
-        config = json.load(f)
-        return config['default']
-
-
-def get_usd_cost_for_resource(batch_resource, usage):
-    """
-    Get the cost of a resource in USD.
-    """
-    # TODO: fix these costs, they're the ones from hail directory
-    return {
-        "boot-disk/pd-ssd/1": 0.0000000000000631286124420108,
-        "compute/n1-nonpreemptible/1": 0.00000000000878083333333334,
-        "compute/n1-preemptible/1": 0.00000000000184861111111111,
-        "disk/local-ssd/1": 0.0000000000000178245493953913,
-        "disk/pd-ssd/1": 0.0000000000000631286124420108,
-        "ip-fee/1024/1": 0.00000000000108506944444444,
-        "memory/n1-nonpreemptible/1": 0.00000000000114935980902778,
-        "memory/n1-preemptible/1": 0.000000000000241970486111111,
-        "service-fee/1": 0.00000000000277777777777778,
-    }[batch_resource] * usage
-
-
-def get_unit_for_batch_resource_type(batch_resource_type: str) -> str:
-    return {
-        "boot-disk/pd-ssd/1": "GB/ms",  # 0.0000000000000631286124420108,
-        "compute/n1-nonpreemptible/1": "cpu/ms",  # 0.00000000000878083333333334,
-        "compute/n1-preemptible/1": 0.00000000000184861111111111,
-        "disk/local-ssd/1": 0.0000000000000178245493953913,
-        "disk/pd-ssd/1": 0.0000000000000631286124420108,
-        "ip-fee/1024/1": 0.00000000000108506944444444,
-        "memory/n1-nonpreemptible/1": 0.00000000000114935980902778,
-        "memory/n1-preemptible/1": 0.000000000000241970486111111,
-        "service-fee/1": 0.00000000000277777777777778,
-    }.get(batch_resource_type, batch_resource_type)
-
-
-def get_batches(billing_project: str, last_batch_id: any, token: str):
-    """
-    Get list of batches for a billing project with no filtering.
-    (Optional): from last_batch_id
-    """
-    q = f'?q=billing_project:{billing_project}'
-    if last_batch_id:
-        q += f'&last_batch_id={last_batch_id}'
-
-    response = requests.get(
-        BATCHES_API + q, headers={'Authorization': 'Bearer ' + token}
+    latest_joint_call = sm.AnalysisApi().get_latest_complete_analysis_for_type(
+        project='seqr',
+        analysis_type='joint_call',
+        # TODO: time=time ??
     )
-    response.raise_for_status()
 
-    return response.json()
+    samples_list = sm.SampleApi().get_samples_by_criteria(
+        {'sample_ids': latest_joint_call['sample_ids']}
+    )
+
+    project_ids = {p['name']: p['id'] for p in sm.ProjectApi().get_my_projects()}
+    counter = defaultdict(int)
+    for sample in samples_list:
+        counter[project_ids[sample['project_id']]] += 1
+
+    return {p: c / len(samples_list) for p, c in counter.items()}
 
 
-def get_finished_batches_for_date(
-    billing_project: str, start_day: datetime, end_day: datetime, token: str
-):
+def from_request(request):
     """
-    Get all the batches that started on {date} and are complete.
-    We assume that batches are ordered by start time, so we can stop
-    when we find a batch that started before the date.
+    From request object, get start and end time if present
     """
-    batches = []
-    last_batch_id = None
-    n_requests = 0
-    skipped = 0
-
-    while True:
-
-        n_requests += 1
-        jresponse = get_batches(billing_project, last_batch_id, token)
-
-        if jresponse['last_batch_id'] == last_batch_id:
-            raise ValueError(
-                f'Something weird is happening with last_batch_job: {last_batch_id}'
-            )
-        last_batch_id = jresponse['last_batch_id']
-        for b in jresponse['batches']:
-            time_created = datetime.strptime(b['time_created'], '%Y-%m-%dT%H:%M:%SZ')
-            in_date_range = True or (
-                time_created >= start_day and time_created < end_day
-            )
-            is_completed = b['complete']
-            if time_created < start_day:
-                logging.info(
-                    f'Got batches in {n_requests} requests, skipping {skipped}'
-                )
-                return batches
-            if in_date_range and is_completed:
-                batches.append(b)
-            else:
-                skipped += 1
+    start, end = get_start_and_end_from_request(request)
+    asyncio.get_event_loop().run_until_complete(main(start, end))
 
 
-def fill_batch_jobs(batch: dict, token: str):
-    """
-    For a single batch, fill in the "jobs" field.
-
-    TODO: use new endpoint with billing info
-    """
-    batch['jobs'] = []
-    last_job_id = None
-    end = False
-    while not end:
-        q = ''
-        if last_job_id:
-            q = f'?last_job_id={last_job_id}'
-        url = JOBS_API.format(batch_id=batch['id']) + q
-        response = requests.get(url, headers={'Authorization': 'Bearer ' + token})
-        response.raise_for_status()
-
-        jresponse = response.json()
-        new_last_job_id = jresponse.get('last_job_id')
-        if new_last_job_id is None:
-            end = True
-        elif last_job_id and new_last_job_id <= last_job_id:
-            raise ValueError('Something fishy with last job id')
-        last_job_id = new_last_job_id
-        batch['jobs'].extend(jresponse['jobs'])
-
-    return batch
-
-
-def finalise_batch_cost(batch: dict) -> float:
-    """
-    Calculate the cost of a batch from the job aggregated resources
-    No filtering is done on attributes here.
-    """
-    raise NotImplementedError
-
-
-def get_currency_conversion_rate_for_time(time: datetime):
-    """
-    Get the currency conversion rate for a given time.
-    Noting that GCP conversion rates are decided at the start of the month,
-    and apply to each job that starts within the month, regardless of when
-    the job finishes.
-    """
-    query = f"""
-        SELECT currency_conversion_rate
-        FROM {GCP_BILLING_BQ_TABLE}
-        WHER DATE(_PARTITIONTIME) = DATE('{time.date()}')
-        LIMIT 1
-    """
-    result = bigquery_client.query(query).result().next()
-    return result['currency_conversion_rate']
-
-
-def main(request=None):
+async def main(start: datetime = None, end: datetime = None):
     """Main body function"""
-    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-    end_day = today - timedelta(days=1)
-    start_day = end_day - timedelta(days=1)
-    if request:
-        start_day = request.start_day
-        end_day = request.end_day
+    start, end = process_default_start_and_end(start, end)
 
     token = get_hail_token()
-    batches = get_finished_batches_for_date(
-        SEQR_HAIL_BILLING_PROJECT, start_day, end_day, token
+
+    batches = await get_finished_batches_for_date(
+        SEQR_HAIL_BILLING_PROJECT, start, end, token
     )
+    if len(batches) == 0:
+        return []
 
-    for batch in batches:
-        fill_batch_jobs(batch, token)
-        print(json.dumps(batches, indent=4))
-
-    # Now we want to do a bunch of aggregation on the seqr jobs to find:
-    #   - Jobs that belong to a specific billing project
+    jobs_in_batch = []
+    for chnk, btch_grp in enumerate(chunk(batches, 100)):
+        if len(batches) > 100:
+            logger.info(
+                f'seqr :: Getting jobs for chunk {chnk+1}/{math.ceil(len(batches)/100)}'
+            )
+        promises = [get_jobs_for_batch(b['id'], token) for b in btch_grp]
+        jobs_in_batch.extend(await asyncio.gather(*promises))
+    for batch, jobs in zip(batches, jobs_in_batch):
+        batch['jobs'] = jobs
 
     entry_items = []
     jobs_with_no_dataset = []
@@ -236,16 +145,20 @@ def main(request=None):
                 jobs_with_no_dataset.append(job)
                 continue
 
-            key = get_key_from_batch_job(batch, job)
             sample = job['attributes'].get('sample')
             name = job['attributes'].get('name')
 
-            labels = [{'name': 'dataset', 'value': dataset}]
+            labels = [
+                {'name': 'dataset', 'value': dataset},
+                {'name': 'name', 'value': name},
+            ]
             if sample:
                 labels.append({'name': 'sample', 'value': sample})
 
             for batch_resource, usage in job['resources']:
                 # batch_resource is one of ['cpu', 'memory', 'disk']
+
+                key = get_key_from_batch_job(batch, job, batch_resource)
 
                 currency_conversion_rate = get_currency_conversion_rate_for_time(
                     job['start_time']
@@ -256,72 +169,49 @@ def main(request=None):
 
                 entry_items.append(
                     {
-                        "id": key,
-                        "dataset": dataset,
-                        "service": {
-                            "id": key,
-                            "description": 'SEQR processing (no-aggregated)',
+                        'id': key,
+                        'dataset': dataset,
+                        'service': {
+                            'id': key,
+                            'description': 'SEQR processing (no-aggregated)',
                         },
-                        "sku": {
-                            "id": name,
-                            "description": 'seqr processing (non-aggregated)',
+                        'sku': {
+                            'id': f'hail-{batch_resource}',
+                            'description': f'{batch_resource} usage',
                         },
-                        "usage_start_time": job['start_time'],
-                        "usage_end_time": job['finish_time'],
-                        # "project": {
-                        #      "id",
-                        #      "number",
-                        #      "labels",
-                        #              "key",
-                        #              "value",
-                        #      "ancestry_numbers",
-                        #      "ancestors",
-                        #              "resource_name",
-                        #              "display_name",
-                        # }
-                        "labels": labels,
-                        "system_labels": [],
-                        "location": {
-                            "location": 'australia-southeast1',
-                            "country": 'Australia',
-                            "region": 'australia',
-                            "zone": None,
+                        'usage_start_time': job['start_time'],
+                        'usage_end_time': job['finish_time'],
+                        'labels': labels,
+                        'system_labels': [],
+                        'location': {
+                            'location': 'australia-southeast1',
+                            'country': 'Australia',
+                            'region': 'australia',
+                            'zone': None,
                         },
-                        "export_time": datetime.now().isoformat(),
-                        "cost": 0.0,
-                        "currency": "AUD",
-                        "currency_conversion_rate": currency_conversion_rate,
-                        "usage": {
-                            "amount": usage,
-                            "unit": get_unit_for_batch_resource_type(batch_resource),
-                            "amount_in_pricing_units": cost,
-                            "pricing_unit": "AUD",
+                        'export_time': datetime.now().isoformat(),
+                        'cost': cost,
+                        'currency': 'AUD',
+                        'currency_conversion_rate': currency_conversion_rate,
+                        'usage': {
+                            'amount': usage,
+                            'unit': get_unit_for_batch_resource_type(batch_resource),
+                            'amount_in_pricing_units': cost,
+                            'pricing_unit': 'AUD',
                         },
-                        # "credits",
-                        #     "amount",
-                        #     "full_name",
-                        #     "id",
-                        #     "type",
-                        "invoice": {
-                            "month": job['start_time'].month + job['start_time'].year
+                        'invoice': {
+                            'month': job['start_time'].month + job['start_time'].year
                         },
-                        # "cost_type",
-                        # "adjustment_info",
-                        #     "id",
-                        #     "description",
-                        #     "mode",
-                        #     "type",
+                        'cost_type': 'regular',
                     }
                 )
 
-    # Convert dict to dataframe
-    df = pd.DataFrame.from_records(entry_items)
-
     # Insert new rows into aggregation table
-    insert_new_rows_in_table(GCP_BILLING_BQ_TABLE, df, (start_day, end_day))
+    insert_new_rows_in_table(table=GCP_DEST_TABLE, obj=entry_items)
 
 
-def get_key_from_batch_job(batch, job):
+def get_key_from_batch_job(batch, job, batch_resource):
+    """Get unique key for entry from params"""
     dataset = job.get('attributes', {}).get('dataset')
     sample = job.get('attributes', {}).get('sample')
 
@@ -331,9 +221,14 @@ def get_key_from_batch_job(batch, job):
         if sample:
             key_components.append(sample)
 
-    key_components.extend(['batch', str(batch["id"]), 'job', str(job["id"])])
+    key_components.extend(['batch', str(batch['id']), 'job', str(job['id'])])
+    key_components.append(batch_resource)
+
     return '-'.join(key_components)
 
 
 if __name__ == '__main__':
-    main()
+    test_start, test_end = None, None
+    # test_start, test_end = datetime(2022, 5, 2), datetime(2022, 5, 5)
+
+    asyncio.get_event_loop().run_until_complete(main(start=test_start, end=test_end))
