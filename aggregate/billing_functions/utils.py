@@ -4,18 +4,18 @@ Class of helper functions for billing aggregate functions
 """
 import os
 import json
+import aiohttp
 import logging
-from collections import defaultdict
-from datetime import datetime, timedelta
+import pandas as pd
+import google.cloud.bigquery as bq
+
 from io import StringIO
 from pathlib import Path
-from typing import Dict, List, Any, Iterator, Optional, Sequence, Tuple, TypeVar
-
-import aiohttp
-import pandas as pd
-
-import google.cloud.bigquery as bq
+from collections import defaultdict
+from datetime import datetime, timedelta
+from google.cloud import secretmanager
 from google.api_core.exceptions import ClientError
+from typing import Dict, List, Any, Iterator, Optional, Sequence, Tuple, TypeVar
 
 logging.basicConfig(level=logging.INFO)
 
@@ -27,7 +27,7 @@ GCP_BILLING_BQ_TABLE = (
 )
 GCP_AGGREGATE_DEST_TABLE = os.getenv('GCP_AGGREGATE_DEST_TABLE')
 logging.info('GCP_AGGREGATE_DEST_TABLE: {}'.format(GCP_AGGREGATE_DEST_TABLE))
-# assert GCP_AGGREGATE_DEST_TABLE
+assert GCP_AGGREGATE_DEST_TABLE
 
 # 10% overhead
 SERVICE_FEE = 0.05
@@ -440,3 +440,17 @@ def process_default_start_and_end(start, end):
     assert isinstance(start, datetime) and isinstance(end, datetime)
 
     return start, end
+
+
+def read_secret(project_id: str, secret_name: str) -> Optional[str]:
+    """Reads the latest version of a GCP Secret Manager secret.
+
+    Returns None if the secret doesn't exist."""
+
+    secret_manager = secretmanager.SecretManagerServiceClient()
+    secret_path = secret_manager.secret_path(project_id, secret_name)
+
+    response = secret_manager.access_secret_version(
+        request={'name': f'{secret_path}/versions/latest'}
+    )
+    return response.payload.data.decode('UTF-8')

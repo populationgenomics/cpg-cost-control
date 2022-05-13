@@ -1,8 +1,9 @@
 config:
-  gcp:project: sabrina-dev-337923
+  gcp:project: billing-admin-290403
   gcp:region: australia-southeast1
   opts:functions:
     - gcp
     - hail
     - seqr
-  opts:destination: sabrina-dev-337923.billing.aggregate
+  opts:destination: billing-admin-290403.billing_aggregate.aggregate
+  # opts:destination: sabrina-dev-337923.billing.aggregate

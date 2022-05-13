@@ -51,8 +51,6 @@ from .utils import (
     get_start_and_end_from_request,
     process_default_start_and_end,
     chunk,
-    to_bq_time,
-    parse_hail_time,
     insert_new_rows_in_table,
     GCP_AGGREGATE_DEST_TABLE,
 )

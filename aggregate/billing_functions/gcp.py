@@ -19,9 +19,11 @@ import hashlib
 import logging
 from datetime import datetime
 from typing import Dict, Optional
-from cpg_utils.cloud import read_secret
+
+# from cpg_utils.cloud import read_secret
 
 from .utils import (
+    read_secret,
     bigquery_client,
     get_start_and_end_from_data,
     insert_dataframe_rows_in_table,

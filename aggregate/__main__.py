@@ -35,7 +35,10 @@ config_values = {
     'FUNCTIONS': opts.get('functions'),
 }
 
-name = 'aggregate-cloud-functions'
+# Set environment variable to the correct project
+os.environ['GCP_AGGREGATE_DEST_TABLE'] = config_values['GCP_AGGREGATE_DEST_TABLE']
+
+name = 'aggregate-billing'
 bucket_name = f'{config_values["PROJECT"]}-{name}'
 
 # Start by enabling all cloud function services
@@ -60,7 +63,7 @@ def archive_folder(path: str) -> pulumi.AssetArchive:
     assets = {}
     for file in os.listdir(path):
         location = os.path.join(path, file)
-        if os.path.isdir(location):
+        if os.path.isdir(location) and not location.startswith('__'):
             asset = pulumi.FileArchive(location)
         elif location.endswith('.py') or location.endswith('.txt'):
             asset = pulumi.FileAsset(path=location)
@@ -87,6 +90,7 @@ def create_cloud_function(
     pubsub_topic: gcp.pubsub.Topic,
     function_bucket: gcp.storage.Bucket,
     source_archive_object: gcp.storage.BucketObject,
+    service_account: gcp.serviceaccount.Account,
 ):
     trigger = gcp.cloudfunctions.FunctionEventTriggerArgs(
         event_type="google.pubsub.topic.publish", resource=pubsub_topic.name
@@ -106,18 +110,26 @@ def create_cloud_function(
         region=config_values['REGION'],
         build_environment_variables=env,
         environment_variables=env,
+        service_account_email=service_account.email,
         opts=pulumi.ResourceOptions(
-            depends_on=[function_bucket, source_archive_object, pubsub_topic]
+            depends_on=[
+                function_bucket,
+                source_archive_object,
+                pubsub_topic,
+                service_account,
+            ]
         ),
     )
 
     return fxn, trigger
 
 
-# Cloud scheduler -> cron
-# Cloud scheduler -> pubsub -> function
-# Set the timezone to australia
-# Compare raw dates to UTC dates
+# Create Service Account
+service_account = gcp.serviceaccount.Account(
+    f"Aggregate Billing default service account",
+    account_id=f"{name}",
+    project=config_values['PROJECT'],
+)
 
 # Create the Cloud Function, deploying the source we just uploaded to Google
 # Cloud Storage.
@@ -132,7 +144,7 @@ pubsub = gcp.pubsub.Topic(f"{name}-topic", project=config_values['PROJECT'])
 for function in functions:
     # Create the function and it's corresponding pubsub and subscription.
     fxn, trigger = create_cloud_function(
-        function, pubsub, function_bucket, source_archive_object
+        function, pubsub, function_bucket, source_archive_object, service_account
     )
 
     pulumi.export(f'{function}_fxn_name', fxn.name)
