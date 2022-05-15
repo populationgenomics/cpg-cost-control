@@ -10,7 +10,7 @@ pip install \
     pandas \
     pyarrow \
     pandas-gbq \
-    
+
 
 ## Azure synchronisation
 

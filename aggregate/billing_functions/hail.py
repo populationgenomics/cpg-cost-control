@@ -127,7 +127,7 @@ def get_finalised_entries_for_batch(dataset, batch: dict) -> List[Dict]:
                 },
                 'sku': {
                     'id': f'hail-{batch_resource}',
-                    'description': f'{batch_resource} usage',
+                    'description': batch_resource,
                 },
                 'usage_start_time': to_bq_time(start_time),
                 'usage_end_time': to_bq_time(end_time),
