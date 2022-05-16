@@ -423,8 +423,12 @@ def get_start_and_end_from_data(data) -> Tuple[Optional[datetime], Optional[date
     Get the start and end times from the cloud function data.
     """
     if data:
-        logging.info("DATA:", data)
-        return data['start'], data['end']
+        if data.get('attributes'):
+            att = data['attributes']
+        elif data.get('message'):
+            att = json.loads(data['message'])
+
+        return att.get('start'), att.get('end')
     return (None, None)
 
 
