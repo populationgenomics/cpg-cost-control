@@ -41,6 +41,7 @@ import sample_metadata as sm
 
 
 from .utils import (
+    get_start_and_end_from_data,
     logger,
     get_currency_conversion_rate_for_time,
     get_unit_for_batch_resource_type,
@@ -106,6 +107,14 @@ def from_request(request):
     """
     start, end = get_start_and_end_from_request(request)
     asyncio.get_event_loop().run_until_complete(main(start, end))
+
+
+def from_pubsub(data=None, context=None):
+    """
+    From pubsub message, get start and end time if present
+    """
+    start, end = get_start_and_end_from_data(data)
+    main(start, end)
 
 
 async def main(start: datetime = None, end: datetime = None):

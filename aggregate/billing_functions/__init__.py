@@ -1,9 +1,9 @@
 from .gcp import from_pubsub as gcp
-from .hail import main as hail
-from .seqr import main as seqr
+from .hail import from_pubsub as hail
+from .seqr import from_pubsub as seqr
 
 # from os.path import dirname, basename, isfile, join
-# import glob
+# import glo
 
 # modules = glob.glob(join(dirname(__file__), "*.py"))
 # __all__ = [
