@@ -12,7 +12,7 @@ import google.cloud.bigquery as bq
 from io import StringIO
 from pathlib import Path
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from google.cloud import secretmanager
 from google.api_core.exceptions import ClientError
 from typing import Dict, List, Any, Iterator, Optional, Sequence, Tuple, TypeVar
@@ -32,6 +32,7 @@ assert GCP_AGGREGATE_DEST_TABLE
 # 10% overhead
 HAIL_SERVICE_FEE = 0.05
 ANALYSIS_RUNNER_PROJECT_ID = 'analysis-runner'
+DEFAULT_RANGE_INTERVAL = timedelta(days=2)
 
 
 HAIL_BASE = 'https://batch.hail.populationgenomics.org.au'
@@ -420,7 +421,9 @@ def get_start_and_end_from_request(
 
 
 def date_range_iterator(
-    start, end, intv=timedelta(days=2)
+    start,
+    end,
+    intv=DEFAULT_RANGE_INTERVAL,
 ) -> Iterator[Tuple[datetime, datetime]]:
     """
     Iterate over a range of dates.

@@ -21,18 +21,10 @@ from datetime import datetime
 from typing import Dict, Optional
 
 # from cpg_utils.cloud import read_secret
-
-from .utils import (
-    read_secret,
-    bigquery_client,
-    get_start_and_end_from_data,
-    insert_dataframe_rows_in_table,
-    get_start_and_end_from_request,
-    process_default_start_and_end,
-    GCP_BILLING_BQ_TABLE,
-    GCP_AGGREGATE_DEST_TABLE,
-    ANALYSIS_RUNNER_PROJECT_ID,
-)
+try:
+    from .utils import *
+except ImportError:
+    from utils import *
 
 logging.basicConfig(level=logging.INFO)
 
@@ -63,7 +55,7 @@ def migrate_billing_data(start, end, dataset_to_gcp_map) -> int:
     _query = f"""
         SELECT * FROM `{GCP_BILLING_BQ_TABLE}`
         WHERE export_time >= '{start.isoformat()}'
-            AND export_time < '{end.isoformat()}'
+            AND export_time <= '{end.isoformat()}'
     """
 
     migrate_rows = bigquery_client.query(_query).result().to_dataframe()
@@ -91,6 +83,9 @@ def main(start: datetime = None, end: datetime = None) -> int:
     # Get the dataset to GCP project map
     dataset_to_gcp_map = get_dataset_to_gcp_map()
 
+    # specific hail topic :)
+    dataset_to_gcp_map['hail-295015'] = 'hail'
+
     # Migrate the data in batches
     result = 0
     for start, end in interval_iterator:
@@ -115,7 +110,8 @@ def billing_row_to_key(row) -> str:
 
 def billing_row_to_topic(row, dataset_to_gcp_map) -> Optional[str]:
     """Convert a billing row to a dataset"""
-    return dataset_to_gcp_map.get(row['project']['id'])
+    project_id = row['project']['id']
+    return dataset_to_gcp_map.get(project_id, row['project']['id'])
 
 
 def get_dataset_to_gcp_map() -> Dict[str, str]:
