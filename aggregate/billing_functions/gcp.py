@@ -18,6 +18,7 @@ import json
 import hashlib
 import logging
 from datetime import datetime
+import re
 from typing import Dict, Optional
 
 # from cpg_utils.cloud import read_secret
@@ -106,10 +107,18 @@ def billing_row_to_key(row) -> str:
     return identifier.hexdigest()
 
 
+RE_matcher = re.compile(r'-\d+$')
+
+
 def billing_row_to_topic(row, dataset_to_gcp_map) -> Optional[str]:
     """Convert a billing row to a dataset"""
     project_id = row['project']['id']
-    return dataset_to_gcp_map.get(project_id, project_id)
+    topic = dataset_to_gcp_map.get(project_id, project_id)
+    if not topic:
+        return 'admin'
+
+    topic = RE_matcher.sub('', topic)
+    return topic
 
 
 def get_dataset_to_gcp_map() -> Dict[str, str]:
