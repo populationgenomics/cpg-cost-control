@@ -3,13 +3,13 @@
         "name": "id",
         "type": "STRING",
         "mode": "REQUIRED",
-        "description": "Some derived attribute to avoid duplicate data"
+        "description": "Hash of values to prevent row duplication"
     },
     {
-        "name": "dataset",
+        "name": "topic",
         "type": "STRING",
-        "mode": "REQUIRED",
-        "description": ""
+        "mode": "NULLABLE",
+        "description": "Project or dataset name"
     },
     {
         "name": "service",

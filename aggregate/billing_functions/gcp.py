@@ -53,25 +53,17 @@ def from_pubsub(data=None, context=None):
     main(start, end)
 
 
-def main(start: datetime = None, end: datetime = None) -> int:
-    """Main body function"""
-    start, end = process_default_start_and_end(start, end)
-
-    # Get the dataset to GCP project map
-    dataset_to_gcp_map = get_dataset_to_gcp_map()
-
-    def get_dataset(row):
-        return billing_row_to_dataset(row, dataset_to_gcp_map)
-
-    allowed_project_ids = "'" + "','".join(dataset_to_gcp_map.keys()) + "'"
-
+def migrate_billing_data(start, end, dataset_to_gcp_map) -> int:
     # Get the billing date in the time period
     # Filter out any rows that aren't in the allowed project ids
+
+    def get_topic(row):
+        return billing_row_to_topic(row, dataset_to_gcp_map)
+
     _query = f"""
         SELECT * FROM `{GCP_BILLING_BQ_TABLE}`
         WHERE export_time >= '{start.isoformat()}'
             AND export_time < '{end.isoformat()}'
-            AND project.id IN ({allowed_project_ids})
     """
 
     migrate_rows = bigquery_client.query(_query).result().to_dataframe()
@@ -82,12 +74,30 @@ def main(start: datetime = None, end: datetime = None) -> int:
 
     # Add id and dataset to the row
     migrate_rows.insert(0, 'id', migrate_rows.apply(billing_row_to_key, axis=1))
-    migrate_rows.insert(1, 'dataset', migrate_rows.apply(get_dataset, axis=1))
+    migrate_rows.insert(1, 'topic', migrate_rows.apply(get_topic, axis=1))
 
     # Remove billing account id
     migrate_rows = migrate_rows.drop(columns=['billing_account_id'])
 
     result = insert_dataframe_rows_in_table(GCP_AGGREGATE_DEST_TABLE, migrate_rows)
+
+    return result
+
+
+def main(start: datetime = None, end: datetime = None) -> int:
+    """Main body function"""
+    interval_iterator = process_default_start_and_end(start, end)
+
+    # Get the dataset to GCP project map
+    dataset_to_gcp_map = get_dataset_to_gcp_map()
+
+    # Migrate the data in batches
+    result = 0
+    for start, end in interval_iterator:
+        logging.info(f"Migrating data from {start} to {end}")
+        result += migrate_billing_data(start, end, dataset_to_gcp_map)
+
+    logging.info(f"Migrated a total of {result} rows")
 
     return result
 
@@ -103,9 +113,9 @@ def billing_row_to_key(row) -> str:
     return identifier.hexdigest()
 
 
-def billing_row_to_dataset(row, dataset_to_gcp_map) -> Optional[str]:
+def billing_row_to_topic(row, dataset_to_gcp_map) -> Optional[str]:
     """Convert a billing row to a dataset"""
-    return dataset_to_gcp_map.get(row['project']['id'], None)
+    return dataset_to_gcp_map.get(row['project']['id'])
 
 
 def get_dataset_to_gcp_map() -> Dict[str, str]:

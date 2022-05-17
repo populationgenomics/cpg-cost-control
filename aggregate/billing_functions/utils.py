@@ -12,7 +12,7 @@ import google.cloud.bigquery as bq
 from io import StringIO
 from pathlib import Path
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from google.cloud import secretmanager
 from google.api_core.exceptions import ClientError
 from typing import Dict, List, Any, Iterator, Optional, Sequence, Tuple, TypeVar
@@ -418,17 +418,34 @@ def get_start_and_end_from_request(
     return (None, None)
 
 
+def date_range_iterator(start, end, intv=timedelta(days=2)):
+    """
+    Iterate over a range of dates.
+    """
+    dt_from = start
+    dt_to = start + intv
+    while dt_to < end:
+        dt_to = min(dt_to, end)
+        yield (dt_from, dt_to)
+        dt_from += intv
+        dt_to += intv
+
+
 def get_start_and_end_from_data(data) -> Tuple[Optional[datetime], Optional[datetime]]:
     """
     Get the start and end times from the cloud function data.
     """
     if data:
+        att = {}
         if data.get('attributes'):
             att = data['attributes']
         elif data.get('message'):
             att = json.loads(data['message'])
 
-        return att.get('start'), att.get('end')
+        start, end = att.get('start'), att.get('end')
+        start = datetime.fromisoformat(start)
+        end = datetime.fromisoformat(end)
+        return start, end
     return (None, None)
 
 
@@ -443,7 +460,7 @@ def process_default_start_and_end(start, end):
 
     assert isinstance(start, datetime) and isinstance(end, datetime)
 
-    return start, end
+    return date_range_iterator(start, end)
 
 
 def read_secret(project_id: str, secret_name: str) -> Optional[str]:
