@@ -84,7 +84,7 @@ def main(start: datetime = None, end: datetime = None) -> int:
     dataset_to_gcp_map = get_dataset_to_gcp_map()
 
     # specific hail topic :)
-    dataset_to_gcp_map['hail-295015'] = 'hail'
+    dataset_to_gcp_map['hail-295901'] = 'hail'
 
     # Migrate the data in batches
     result = 0
@@ -111,7 +111,7 @@ def billing_row_to_key(row) -> str:
 def billing_row_to_topic(row, dataset_to_gcp_map) -> Optional[str]:
     """Convert a billing row to a dataset"""
     project_id = row['project']['id']
-    return dataset_to_gcp_map.get(project_id, row['project']['id'])
+    return dataset_to_gcp_map.get(project_id, project_id)
 
 
 def get_dataset_to_gcp_map() -> Dict[str, str]:
