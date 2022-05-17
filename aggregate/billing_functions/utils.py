@@ -30,7 +30,7 @@ logging.info('GCP_AGGREGATE_DEST_TABLE: {}'.format(GCP_AGGREGATE_DEST_TABLE))
 assert GCP_AGGREGATE_DEST_TABLE
 
 # 10% overhead
-SERVICE_FEE = 0.05
+HAIL_SERVICE_FEE = 0.05
 ANALYSIS_RUNNER_PROJECT_ID = 'analysis-runner'
 
 
@@ -204,7 +204,7 @@ async def get_jobs_for_batch(batch_id, token: str) -> List[str]:
     return jobs
 
 
-def insert_new_rows_in_table(table: str, obj: List[Dict[str, Any]]):
+def insert_new_rows_in_table(table: str, obj: List[Dict[str, Any]]) -> int:
     """Insert JSON rows into a BQ table"""
 
     _query = f"""
@@ -234,12 +234,14 @@ def insert_new_rows_in_table(table: str, obj: List[Dict[str, Any]]):
     # Filter out any rows that are already in the table
     filtered_obj = [o for o in obj if o['id'] not in existing_ids]
 
-    if len(filtered_obj) == 0:
+    nrows = len(filtered_obj)
+
+    if nrows == 0:
         logging.info('Not inserting any rows')
-        return []
+        return 0
 
     # Count number of rows adding
-    logging.info(f'Inserting {len(filtered_obj)}/{len(obj)} rows')
+    logging.info(f'Inserting {nrows}/{len(obj)} rows')
 
     # Insert the new rows
     job_config = bq.LoadJobConfig()
@@ -253,13 +255,12 @@ def insert_new_rows_in_table(table: str, obj: List[Dict[str, Any]]):
     )
     try:
         result = resp.result()
-        logging.info(str(result))
-        logging.info(f'Inserted {result.output_rows} rows')
+        logging.info(f'Inserted {result.output_rows}/{nrows} rows')
     except ClientError as e:
         logging.error(resp.errors)
         raise e
 
-    return filtered_obj
+    return nrows
 
 
 def insert_dataframe_rows_in_table(table: str, df: pd.DataFrame):
