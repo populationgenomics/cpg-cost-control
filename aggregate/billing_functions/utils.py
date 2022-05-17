@@ -445,6 +445,8 @@ def get_start_and_end_from_data(data) -> Tuple[Optional[datetime], Optional[date
         dates = dict()
         if data.get('attributes'):
             dates = data.get('attributes', {})
+        elif data.get('start') and data.get('end'):
+            dates = data
         elif data.get('message'):
             dates = dict(json.loads(data['message'])) or {}
 
