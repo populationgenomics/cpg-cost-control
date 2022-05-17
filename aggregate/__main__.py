@@ -111,7 +111,8 @@ def create_cloud_function(
         build_environment_variables=env,
         environment_variables=env,
         service_account_email=service_account.email,
-        available_memory_mb=2048,
+        available_memory_mb=1024,
+        timeout=540,
         opts=pulumi.ResourceOptions(
             depends_on=[
                 function_bucket,
