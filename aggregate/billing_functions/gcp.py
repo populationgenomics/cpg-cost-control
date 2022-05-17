@@ -65,11 +65,9 @@ def migrate_billing_data(start, end, dataset_to_gcp_map) -> int:
         return 0
 
     # Add id and dataset to the row
-    migrate_rows.insert(0, 'id', migrate_rows.apply(billing_row_to_key, axis=1))
-    migrate_rows.insert(1, 'topic', migrate_rows.apply(get_topic, axis=1))
-
-    # Remove billing account id
     migrate_rows = migrate_rows.drop(columns=['billing_account_id'])
+    migrate_rows.insert(0, 'topic', migrate_rows.apply(get_topic, axis=1))
+    migrate_rows.insert(0, 'id', migrate_rows.apply(billing_row_to_key, axis=1))
 
     result = insert_dataframe_rows_in_table(GCP_AGGREGATE_DEST_TABLE, migrate_rows)
 
