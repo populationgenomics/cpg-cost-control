@@ -430,7 +430,7 @@ def date_range_iterator(
     """
     dt_from = start
     dt_to = start + intv
-    while dt_to < end:
+    while dt_from < end:
         dt_to = min(dt_to, end)
         yield (dt_from, dt_to)
         dt_from += intv
