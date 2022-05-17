@@ -418,7 +418,9 @@ def get_start_and_end_from_request(
     return (None, None)
 
 
-def date_range_iterator(start, end, intv=timedelta(days=2)):
+def date_range_iterator(
+    start, end, intv=timedelta(days=2)
+) -> Iterator[Tuple[datetime, datetime]]:
     """
     Iterate over a range of dates.
     """
@@ -436,20 +438,25 @@ def get_start_and_end_from_data(data) -> Tuple[Optional[datetime], Optional[date
     Get the start and end times from the cloud function data.
     """
     if data:
-        att = {}
+        dates = dict()
         if data.get('attributes'):
-            att = data['attributes']
+            dates = data.get('attributes', {})
         elif data.get('message'):
-            att = json.loads(data['message'])
+            dates = dict(json.loads(data['message'])) or {}
 
-        start, end = att.get('start'), att.get('end')
-        start = datetime.fromisoformat(start)
-        end = datetime.fromisoformat(end)
+        logging.info(f'data: {data}, dates: {dates}')
+
+        start = dates.get('start', '')
+        end = dates.get('end', '')
+
+        if start and end:
+            return datetime.fromisoformat(start), datetime.fromisoformat(end)
+
         return start, end
     return (None, None)
 
 
-def process_default_start_and_end(start, end):
+def process_default_start_and_end(start, end) -> Iterator[Tuple[datetime, datetime]]:
     """Process start and end times (and get defaults)"""
     if not start:
         start = datetime.now().replace(

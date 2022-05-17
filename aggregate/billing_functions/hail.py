@@ -30,9 +30,10 @@ Tasks:
     - And maybe only sync 'settled' jobs within datetimes
         (ie: finished between START + END of previous time period)
 """
-import math
-import asyncio
 import json
+import math
+import logging
+import asyncio
 from collections import defaultdict
 from datetime import datetime
 from typing import Dict, List
@@ -62,6 +63,7 @@ from .utils import (
 
 
 SERVICE_ID = 'hail'
+logging.basicConfig(level=logging.INFO)
 
 
 def get_billing_projects():
@@ -204,19 +206,34 @@ def from_pubsub(data=None, context=None):
     main(start, end)
 
 
-async def main(start: datetime = None, end: datetime = None):
-    """Main body function"""
-    start, end = process_default_start_and_end(start, end)
-
-    token = get_hail_token()
+async def migrate_hail_data(start, end, token):
     promises = [
         get_entries_for_billing_project(bp, start, end, token)
         for bp in get_billing_projects()
     ]
     entries_nested = await asyncio.gather(*promises)
     entries = [entry for entry_list in entries_nested for entry in entry_list]
+
     # Insert new rows into aggregation table
-    insert_new_rows_in_table(table=GCP_AGGREGATE_DEST_TABLE, obj=entries)
+    result = insert_new_rows_in_table(table=GCP_AGGREGATE_DEST_TABLE, obj=entries)
+    return result
+
+
+def main(start: datetime = None, end: datetime = None) -> int:
+    """Main body function"""
+    interval_iterator = process_default_start_and_end(start, end)
+
+    hail_token = get_hail_token()
+
+    # Migrate the data in batches
+    result = 0
+    for start, end in interval_iterator:
+        logging.info(f"Migrating data from {start} to {end}")
+        result += migrate_hail_data(start, end, hail_token)
+
+    logging.info(f"Migrated a total of {result} rows")
+
+    return result
 
 
 if __name__ == '__main__':
