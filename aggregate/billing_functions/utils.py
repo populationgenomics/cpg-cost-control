@@ -460,18 +460,28 @@ def get_start_and_end_from_data(data) -> Tuple[Optional[datetime], Optional[date
     return (None, None)
 
 
-def process_default_start_and_end(start, end) -> Iterator[Tuple[datetime, datetime]]:
-    """Process start and end times (and get defaults)"""
+def process_default_start_and_end(start, end) -> Tuple[datetime, datetime]:
+    """
+    Process the start and end times.
+    """
     if not start:
-        start = datetime.now().replace(
-            hour=0, minute=0, second=0, microsecond=0
-        ) - timedelta(days=2)
+        start = (
+            datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+            - DEFAULT_RANGE_INTERVAL
+        )
     if not end:
         end = datetime.now()
 
     assert isinstance(start, datetime) and isinstance(end, datetime)
+    return start, end
 
-    return date_range_iterator(start, end)
+
+def get_date_intervals_for(
+    start, end, interval=DEFAULT_RANGE_INTERVAL
+) -> Iterator[Tuple[datetime, datetime]]:
+    """Process start and end times (and get defaults)"""
+    s, e = process_default_start_and_end(start, end)
+    return date_range_iterator(s, e, intv=interval)
 
 
 def read_secret(project_id: str, secret_name: str) -> Optional[str]:

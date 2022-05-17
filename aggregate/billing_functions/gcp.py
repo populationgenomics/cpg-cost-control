@@ -78,7 +78,7 @@ def migrate_billing_data(start, end, dataset_to_gcp_map) -> int:
 
 def main(start: datetime = None, end: datetime = None) -> int:
     """Main body function"""
-    interval_iterator = process_default_start_and_end(start, end)
+    interval_iterator = get_date_intervals_for(start, end)
 
     # Get the dataset to GCP project map
     dataset_to_gcp_map = get_dataset_to_gcp_map()

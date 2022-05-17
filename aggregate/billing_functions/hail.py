@@ -31,39 +31,42 @@ Tasks:
         (ie: finished between START + END of previous time period)
 """
 import json
+from copy import deepcopy
 import math
 import logging
 import asyncio
 from collections import defaultdict
 from datetime import datetime
-from typing import Dict, List
+from typing import Any, Dict, List
 
 from cpg_utils.cloud import read_secret
 
-from .utils import (
-    get_start_and_end_from_data,
-    logger,
-    HAIL_UI_URL,
-    SERVICE_FEE,
-    ANALYSIS_RUNNER_PROJECT_ID,
-    GCP_AGGREGATE_DEST_TABLE,
-    get_currency_conversion_rate_for_time,
-    get_unit_for_batch_resource_type,
-    get_usd_cost_for_resource,
-    get_finished_batches_for_date,
-    get_hail_token,
-    get_jobs_for_batch,
-    get_start_and_end_from_request,
-    process_default_start_and_end,
-    chunk,
-    to_bq_time,
-    parse_hail_time,
-    insert_new_rows_in_table,
-)
+try:
+    from .utils import *
+except ImportError:
+    from utils import *
 
 
 SERVICE_ID = 'hail'
 logging.basicConfig(level=logging.INFO)
+
+HAIL_PROJECT_FIELD = {
+    "id": "hail-295901",
+    "number": "805950571114",
+    "name": "hail-295901",
+    "labels": [],
+    "ancestry_numbers": "/648561325637/",
+    "ancestors": [
+        {
+            "resource_name": "projects/805950571114",
+            "display_name": "hail-295901",
+        },
+        {
+            "resource_name": "organizations/648561325637",
+            "display_name": "populationgenomics.org.au",
+        },
+    ],
+}
 
 
 def get_billing_projects():
@@ -98,10 +101,14 @@ def get_finalised_entries_for_batch(dataset, batch: dict) -> List[Dict]:
             resource_usage[batch_resource] += usage
 
     for batch_resource, usage in resource_usage.items():
+        if batch_resource.startswith('service-fee'):
+            continue
 
-        key = f'{SERVICE_ID}-{dataset}-batch-{batch_id}-{batch_resource}'
+        key = f'{SERVICE_ID}-{dataset}-batch-{batch_id}-{batch_resource}'.replace(
+            "/", "-"
+        )
 
-        hail_ui_url = HAIL_UI_URL.replace('{batch_id}', str(batch_id))
+        ui_url = HAIL_UI_URL.replace('{batch_id}', str(batch_id))
         labels = [
             {'key': 'dataset', 'value': dataset},
             {'key': 'batch_id', 'value': str(batch_id)},
@@ -112,10 +119,10 @@ def get_finalised_entries_for_batch(dataset, batch: dict) -> List[Dict]:
                 {'key': 'name', 'value': name.encode('ascii', 'ignore').decode()}
             )
 
-        labels.append({'key': 'url', 'value': hail_ui_url})
+        labels.append({'key': 'url', 'value': ui_url})
 
         cost = (
-            (1 + SERVICE_FEE)
+            (1 + HAIL_SERVICE_FEE)
             * currency_conversion_rate
             * get_usd_cost_for_resource(batch_resource, usage)
         )
@@ -123,7 +130,7 @@ def get_finalised_entries_for_batch(dataset, batch: dict) -> List[Dict]:
         entries.append(
             {
                 'id': key,
-                'dataset': dataset,
+                'topic': dataset,
                 'service': {
                     'id': SERVICE_ID,
                     'description': 'Hail compute',
@@ -154,7 +161,9 @@ def get_finalised_entries_for_batch(dataset, batch: dict) -> List[Dict]:
                     'pricing_unit': 'AUD',
                 },
                 'credits': [],
-                'invoice': {'month': f'{start_time.month}{start_time.year}'},
+                'invoice': {
+                    'month': f'{start_time.year}{str(start_time.month).zfill(2)}'
+                },
                 'cost_type': 'regular',
                 'adjustment_info': None,
             }
@@ -163,29 +172,63 @@ def get_finalised_entries_for_batch(dataset, batch: dict) -> List[Dict]:
     return entries
 
 
-async def get_entries_for_billing_project(bp, start, end, token):
+def get_hail_credits(entries) -> List[Dict[str, Any]]:
+    """
+    Get a hail credit for each entry
+    """
+
+    hail_credits = [deepcopy(e) for e in entries]
+    for entry in hail_credits:
+
+        entry['topic'] = 'hail'
+        entry['id'] += '-credit'
+        entry['cost'] = -entry['cost']
+        entry['service'] = {
+            'id': 'aggregated-credit',
+            'description': 'Hail credit to correctly account for costs',
+        }
+        entry['project'] = HAIL_PROJECT_FIELD
+
+    return hail_credits
+
+
+async def process_and_finalise_entries_for(bp, start, end, token) -> int:
     """
     For a given billing project, get all the batches completed in (start, end]
     and convert these batches into entries (1 per batch) for the aggregation table.
     """
-    entries = []
     logger.info(f'{bp} :: loading batches')
     batches = await get_finished_batches_for_date(bp, start, end, token)
     if len(batches) == 0:
-        return []
+        return 0
     # batches = [b for b in batches if '...' not in b['attributes']['name']]
     logger.info(f'{bp} :: Filling in information for {len(batches)} batches')
-    jobs_in_batch = []
-    for chnk, btch_grp in enumerate(chunk(batches, 100)):
-        if len(batches) > 100:
-            logger.info(
-                f'{bp} :: Getting jobs for chunk {chnk+1}/{math.ceil(len(batches)/100)}'
-            )
-        promises = [get_jobs_for_batch(b['id'], token) for b in btch_grp]
-        jobs_in_batch.extend(await asyncio.gather(*promises))
-    for batch, jobs in zip(batches, jobs_in_batch):
-        batch['jobs'] = jobs
-        entries.extend(get_finalised_entries_for_batch(bp, batch))
+
+    # we'll process 500 batches, and insert all entries for that
+    chnk_counter = 0
+    final_chnk_size = 50
+    nchnks = math.ceil(len(batches) / final_chnk_size)
+    result = 0
+    for btch_grp in chunk(batches, 500):
+        entries = []
+        jobs_in_batch = []
+
+        for batch_group_group in chunk(btch_grp, final_chnk_size):
+            chnk_counter += 1
+            if len(batches) > 100:
+                logger.info(f'{bp} :: Getting jobs for chunk {chnk_counter}/{nchnks}')
+
+            promises = [get_jobs_for_batch(b['id'], token) for b in batch_group_group]
+            jobs_in_batch.extend(await asyncio.gather(*promises))
+
+        for batch, jobs in zip(btch_grp, jobs_in_batch):
+            batch['jobs'] = jobs
+            entries.extend(get_finalised_entries_for_batch(bp, batch))
+
+        # Insert new rows into aggregation table
+        entries.extend(get_hail_credits(entries))
+        logger.info(f'{bp} :: Inserting {len(entries)} entries')
+        result += insert_new_rows_in_table(table=GCP_AGGREGATE_DEST_TABLE, obj=entries)
 
     return entries
 
@@ -203,33 +246,28 @@ def from_pubsub(data=None, context=None):
     From pubsub message, get start and end time if present
     """
     start, end = get_start_and_end_from_data(data)
-    main(start, end)
+    asyncio.get_event_loop().run_until_complete(main(start, end))
 
 
 async def migrate_hail_data(start, end, token):
     promises = [
-        get_entries_for_billing_project(bp, start, end, token)
+        process_and_finalise_entries_for(bp, start, end, token)
         for bp in get_billing_projects()
     ]
-    entries_nested = await asyncio.gather(*promises)
-    entries = [entry for entry_list in entries_nested for entry in entry_list]
+    result_promises = await asyncio.gather(*promises)
+    result = sum(result_promises)
 
-    # Insert new rows into aggregation table
-    result = insert_new_rows_in_table(table=GCP_AGGREGATE_DEST_TABLE, obj=entries)
     return result
 
 
-def main(start: datetime = None, end: datetime = None) -> int:
+async def main(start: datetime = None, end: datetime = None) -> int:
     """Main body function"""
-    interval_iterator = process_default_start_and_end(start, end)
+    start, end = process_default_start_and_end(start, end)
 
     hail_token = get_hail_token()
 
     # Migrate the data in batches
-    result = 0
-    for start, end in interval_iterator:
-        logging.info(f"Migrating data from {start} to {end}")
-        result += migrate_hail_data(start, end, hail_token)
+    result = await migrate_hail_data(start, end, hail_token)
 
     logging.info(f"Migrated a total of {result} rows")
 
