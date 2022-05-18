@@ -430,11 +430,14 @@ def date_range_iterator(
     """
     dt_from = start
     dt_to = start + intv
-    while dt_from < end:
-        dt_to = min(dt_to, end)
+    while dt_to < end:
         yield (dt_from, dt_to)
         dt_from += intv
         dt_to += intv
+
+    dt_to = min(dt_to, end)
+    if dt_from < end:
+        yield (dt_from, end)
 
 
 def get_start_and_end_from_data(data) -> Tuple[Optional[datetime], Optional[datetime]]:
@@ -472,7 +475,7 @@ def process_default_start_and_end(start, end) -> Tuple[datetime, datetime]:
             - DEFAULT_RANGE_INTERVAL
         )
     if not end:
-        end = datetime.now()
+        end = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
 
     assert isinstance(start, datetime) and isinstance(end, datetime)
     return start, end
