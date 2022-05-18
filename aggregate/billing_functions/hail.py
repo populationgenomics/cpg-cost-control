@@ -206,8 +206,8 @@ async def process_and_finalise_entries_for(bp, start, end, token) -> int:
 
     # we'll process 500 batches, and insert all entries for that
     chnk_counter = 0
-    final_chnk_size = 50
-    nchnks = math.ceil(len(batches) / final_chnk_size)
+    final_chnk_size = 30
+    nchnks = math.ceil(len(batches) / 500) * final_chnk_size
     result = 0
     for btch_grp in chunk(batches, 500):
         entries = []
@@ -215,8 +215,16 @@ async def process_and_finalise_entries_for(bp, start, end, token) -> int:
 
         for batch_group_group in chunk(btch_grp, final_chnk_size):
             chnk_counter += 1
+            min_batch = min(batch_group_group, key=lambda b: b['time_created'])
+            max_batch = max(batch_group_group, key=lambda b: b['time_created'])
+
+            for batch in batch_group_group:
+                entries.extend(get_finalised_entries_for_batch(bp, batch))
+                jobs_in_batch.extend(batch['jobs'])
             if len(batches) > 100:
-                logger.info(f'{bp} :: Getting jobs for chunk {chnk_counter}/{nchnks}')
+                logger.info(
+                    f'{bp} :: Getting jobs for batch chunk {chnk_counter}/{nchnks} [{min_batch}, {max_batch}]'
+                )
 
             promises = [get_jobs_for_batch(b['id'], token) for b in batch_group_group]
             jobs_in_batch.extend(await asyncio.gather(*promises))
@@ -224,6 +232,9 @@ async def process_and_finalise_entries_for(bp, start, end, token) -> int:
         for batch, jobs in zip(btch_grp, jobs_in_batch):
             batch['jobs'] = jobs
             entries.extend(get_finalised_entries_for_batch(bp, batch))
+
+        # Give hail batch a break :sweat:
+        await asyncio.sleep(1)
 
         # Insert new rows into aggregation table
         entries.extend(get_hail_credits(entries))
@@ -275,7 +286,7 @@ async def main(start: datetime = None, end: datetime = None) -> int:
 
 
 if __name__ == '__main__':
-    test_start, test_end = None, None
-    # test_start, test_end = datetime(2022, 5, 2), datetime(2022, 5, 5)
+    # test_start, test_end = None, None
+    test_start, test_end = datetime(2022, 4, 1), datetime(2022, 5, 3)
 
     asyncio.get_event_loop().run_until_complete(main(start=test_start, end=test_end))
