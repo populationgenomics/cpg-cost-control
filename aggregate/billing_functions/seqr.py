@@ -34,27 +34,20 @@ import json
 from datetime import datetime, timedelta, timezone
 
 import asyncio
-import requests
-import pandas as pd
+
 from google.cloud import bigquery
-import sample_metadata as sm
 
+from sample_metadata.apis import SampleApi, ProjectApi, AnalysisApi
+from sample_metadata.model.sequence_type import SequenceType
+from sample_metadata.model.analysis_type import AnalysisType
+from sample_metadata.model.analysis_status import AnalysisStatus
+from sample_metadata.model.analysis_query_model import AnalysisQueryModel
 
-from .utils import (
-    get_start_and_end_from_data,
-    logger,
-    get_currency_conversion_rate_for_time,
-    get_unit_for_batch_resource_type,
-    get_usd_cost_for_resource,
-    get_finished_batches_for_date,
-    get_hail_token,
-    get_jobs_for_batch,
-    get_start_and_end_from_request,
-    process_default_start_and_end,
-    chunk,
-    insert_new_rows_in_table,
-    GCP_AGGREGATE_DEST_TABLE,
-)
+try:
+    from .utils import *
+except ImportError:
+    from utils import *
+
 
 SERVICE_ID = 'seqr'
 SEQR_HAIL_BILLING_PROJECT = 'seqr'
@@ -69,6 +62,9 @@ BATCHES_API = BASE + '/api/v1alpha/batches'
 JOBS_API = BASE + '/api/v1alpha/batches/{batch_id}/jobs/resources'
 
 bigquery_client = bigquery.Client()
+papi = ProjectApi()
+sapi = SampleApi()
+aapi = AnalysisApi()
 
 
 def get_datasets():
@@ -76,29 +72,23 @@ def get_datasets():
     Get Hail billing projects, same names as dataset
     TOOD: Implement
     """
-    return ['acute-care', 'perth-neuro']
-
-
-def get_sample_fractional_breakdown_by_dataset(time: datetime):
-    """
-    Get the fractional breakdown of samples by dataset.
-    """
-    latest_joint_call = sm.AnalysisApi().get_latest_complete_analysis_for_type(
-        project='seqr',
-        analysis_type='joint_call',
-        # TODO: time=time ??
-    )
-
-    samples_list = sm.SampleApi().get_samples_by_criteria(
-        {'sample_ids': latest_joint_call['sample_ids']}
-    )
-
-    project_ids = {p['name']: p['id'] for p in sm.ProjectApi().get_my_projects()}
-    counter = defaultdict(int)
-    for sample in samples_list:
-        counter[project_ids[sample['project_id']]] += 1
-
-    return {p: c / len(samples_list) for p, c in counter.items()}
+    return [
+        "acute-care",
+        "perth-neuro",
+        # "rdnow",
+        "heartkids",
+        "ravenscroft-rdstudy",
+        # "ohmr3-mendelian",
+        # "ohmr4-epilepsy",
+        # "flinders-ophthal",
+        "circa",
+        # "schr-neuro",
+        # "brain-malf",
+        # "leukodystrophies",
+        # "mito-disease",
+        "ravenscroft-arch",
+        "hereditary-neuro",
+    ]
 
 
 def from_request(request):
@@ -117,10 +107,7 @@ def from_pubsub(data=None, context=None):
     main(start, end)
 
 
-async def main(start: datetime = None, end: datetime = None):
-    """Main body function"""
-    start, end = process_default_start_and_end(start, end)
-
+async def get_entries_from_hail(start: datetime, end: datetime):
     token = get_hail_token()
 
     batches = await get_finished_batches_for_date(
@@ -129,16 +116,30 @@ async def main(start: datetime = None, end: datetime = None):
     if len(batches) == 0:
         return []
 
+    # we'll process 500 batches, and insert all entries for that
+    chnk_counter = 0
+    final_chnk_size = 30
+    nchnks = math.ceil(len(batches) / 500) * final_chnk_size
     jobs_in_batch = []
-    for chnk, btch_grp in enumerate(chunk(batches, 100)):
-        if len(batches) > 100:
-            logger.info(
-                f'seqr :: Getting jobs for chunk {chnk+1}/{math.ceil(len(batches)/100)}'
-            )
-        promises = [get_jobs_for_batch(b['id'], token) for b in btch_grp]
-        jobs_in_batch.extend(await asyncio.gather(*promises))
-    for batch, jobs in zip(batches, jobs_in_batch):
-        batch['jobs'] = jobs
+    for btch_grp in chunk(batches, 500):
+        entries = []
+        jobs_in_batch = []
+
+        for batch_group_group in chunk(btch_grp, final_chnk_size):
+            chnk_counter += 1
+            min_batch = min(batch_group_group, key=lambda b: b['time_created'])
+            max_batch = max(batch_group_group, key=lambda b: b['time_created'])
+
+            for batch in batch_group_group:
+                # entries.extend(get_finalised_entries_for_batch('seqr', batch))
+                jobs_in_batch.extend(batch['jobs'])
+            if len(batches) > 100:
+                logger.info(
+                    f'seqr :: Getting jobs for batch chunk {chnk_counter}/{nchnks} [{min_batch}, {max_batch}]'
+                )
+
+            promises = [get_jobs_for_batch(b['id'], token) for b in batch_group_group]
+            jobs_in_batch.extend(await asyncio.gather(*promises))
 
     entry_items = []
     jobs_with_no_dataset = []
@@ -174,7 +175,7 @@ async def main(start: datetime = None, end: datetime = None):
                 entry_items.append(
                     {
                         'id': key,
-                        'dataset': dataset,
+                        'topic': dataset,
                         'service': {
                             'id': key,
                             'description': 'SEQR processing (no-aggregated)',
@@ -209,6 +210,92 @@ async def main(start: datetime = None, end: datetime = None):
                         'cost_type': 'regular',
                     }
                 )
+
+
+async def generate_proportionate_map_of_dataset(start, finish, projects: List[str]):
+
+    # from 2022-06-01, we use it based on es-index, otherwise joint-calling
+    relevant_analysis = []
+    sm_projects = await papi.get_all_projects_async()
+    project_id_to_name = {p['id']: p['name'] for p in sm_projects}
+
+    if start < datetime(2022, 6, 1):
+        joint_calls = await aapi.query_analyses_async(
+            AnalysisQueryModel(
+                type=AnalysisType('joint-calling'),
+                status=AnalysisStatus('completed'),
+                projects=['seqr'],
+            )
+        )
+
+        relevant_analysis.extend(joint_calls)
+
+    elif finish > datetime(2022, 6, 1):
+        es_indices = await aapi.query_analyses_async(
+            AnalysisQueryModel(
+                type=AnalysisType('es-index'),
+                status=AnalysisStatus('completed'),
+                projects=['seqr'],
+            )
+        )
+        relevant_analysis.extend(es_indices)
+    assert relevant_analysis
+    sorted_calls = sorted(relevant_analysis, key=lambda x: x['timestamp_completed'])
+
+    all_samples = set(s for a in relevant_analysis for s in a['sample_ids'])
+    crams = await aapi.query_analyses_async(
+        AnalysisQueryModel(
+            sample_ids=list(all_samples),
+            type=AnalysisType('cram'),
+            projects=projects,
+            status=AnalysisStatus('completed'),
+        )
+    )
+
+    cram_map = {c['sample_ids'][0]: c for c in crams}
+
+    missing_samples = set()
+    missing_sizes = {}
+
+    proportioned_datasets: Dict[datetime, Dict[str, float]] = {}
+    for analysis in sorted_calls:
+        dt = datetime.fromisoformat(analysis['timestamp_completed'])
+        samples = analysis['sample_ids']
+
+        size_per_project = defaultdict(int)
+        for s in samples:
+            cram = cram_map.get(s)
+            if not cram:
+                missing_samples.add(s)
+                continue
+            cram_size = cram['meta'].get('size')
+            if not cram_size:
+                missing_sizes[s] = cram['output']
+            project_id = cram['project']
+            size_per_project[project_id] += cram_size
+
+        total_size = sum(size_per_project.values())
+        proportioned_datasets[dt] = {
+            project_id_to_name[project_id]: size / total_size
+            for project_id, size in size_per_project.items()
+        }
+
+    print('Missing crams: ' + ', '.join(missing_samples))
+    print('Missing sizes: ' + ', '.join(f'{k} ({v})' for k, v in missing_sizes.items()))
+
+    return proportioned_datasets
+
+
+async def main(start: datetime = None, end: datetime = None):
+    """Main body function"""
+    start, end = process_default_start_and_end(start, end)
+
+    projects = get_datasets()
+
+    prop_map = await generate_proportionate_map_of_dataset(start, end, projects)
+    print(prop_map)
+
+    entry_items = get_entries_from_hail(start, end)
 
     # Insert new rows into aggregation table
     insert_new_rows_in_table(table=GCP_AGGREGATE_DEST_TABLE, obj=entry_items)
