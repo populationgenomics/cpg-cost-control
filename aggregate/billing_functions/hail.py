@@ -104,69 +104,39 @@ def get_finalised_entries_for_batch(dataset, batch: dict) -> List[Dict]:
         if batch_resource.startswith('service-fee'):
             continue
 
-        key = f'{SERVICE_ID}-{dataset}-batch-{batch_id}-{batch_resource}'.replace(
-            "/", "-"
-        )
+        labels = {
+            'dataset': dataset,
+            'batch_id': str(batch_id),
+            'batch_resource': batch_resource,
+        }
 
-        ui_url = HAIL_UI_URL.replace('{batch_id}', str(batch_id))
-        labels = [
-            {'key': 'dataset', 'value': dataset},
-            {'key': 'batch_id', 'value': str(batch_id)},
-        ]
         name = batch.get('attributes', {}).get('name')
         if name:
-            labels.append(
-                {'key': 'name', 'value': name.encode('ascii', 'ignore').decode()}
-            )
+            labels['batch_name'] = name
 
-        labels.append({'key': 'url', 'value': ui_url})
+        labels['url'] = HAIL_UI_URL.replace('{batch_id}', str(batch_id))
 
         cost = (
             (1 + HAIL_SERVICE_FEE)
             * currency_conversion_rate
             * get_usd_cost_for_resource(batch_resource, usage)
         )
-
         entries.append(
-            {
-                'id': key,
-                'topic': dataset,
-                'service': {
-                    'id': SERVICE_ID,
-                    'description': 'Hail compute',
-                },
-                'sku': {
-                    'id': f'hail-{batch_resource}',
-                    'description': batch_resource,
-                },
-                'usage_start_time': to_bq_time(start_time),
-                'usage_end_time': to_bq_time(end_time),
-                'project': None,
-                'labels': labels,
-                'system_labels': [],
-                'location': {
-                    'location': 'australia-southeast1',
-                    'country': 'Australia',
-                    'region': 'australia',
-                    'zone': None,
-                },
-                'export_time': to_bq_time(datetime.now()),
-                'cost': cost,
-                'currency': 'AUD',
-                'currency_conversion_rate': currency_conversion_rate,
-                'usage': {
-                    'amount': usage,
-                    'unit': get_unit_for_batch_resource_type(batch_resource),
-                    'amount_in_pricing_units': cost,
-                    'pricing_unit': 'AUD',
-                },
-                'credits': [],
-                'invoice': {
-                    'month': f'{start_time.year}{str(start_time.month).zfill(2)}'
-                },
-                'cost_type': 'regular',
-                'adjustment_info': None,
-            }
+            get_entry(
+                key=f'{SERVICE_ID}-{dataset}-batch-{batch_id}-{batch_resource}'.replace(
+                    "/", "-"
+                ),
+                topic=dataset,
+                service_id=SERVICE_ID,
+                description='Hail compute',
+                cost=cost,
+                currency_conversion_rate=currency_conversion_rate,
+                usage=usage,
+                batch_resource=batch_resource,
+                start_time=start_time,
+                end_time=end_time,
+                labels=labels,
+            )
         )
 
     return entries
@@ -187,6 +157,8 @@ def get_hail_credits(entries) -> List[Dict[str, Any]]:
             'id': 'aggregated-credit',
             'description': 'Hail credit to correctly account for costs',
         }
+        entry['sku']['id'] += '-credit'
+        entry['sku']['description'] += '-credit'
         entry['project'] = HAIL_PROJECT_FIELD
 
     return hail_credits

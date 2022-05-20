@@ -3,11 +3,14 @@
 Class of helper functions for billing aggregate functions
 """
 import os
+import re
 import json
+from random import random
 import aiohttp
 import logging
 import pandas as pd
 import google.cloud.bigquery as bq
+import time
 
 from io import StringIO
 from pathlib import Path
@@ -29,6 +32,9 @@ GCP_AGGREGATE_DEST_TABLE = os.getenv('GCP_AGGREGATE_DEST_TABLE')
 logging.info('GCP_AGGREGATE_DEST_TABLE: {}'.format(GCP_AGGREGATE_DEST_TABLE))
 assert GCP_AGGREGATE_DEST_TABLE
 
+SOURCE_GCP_PROJECT = os.getenv('SOURCE_GCP_PROJECT')
+IS_PRODUCTION = os.getenv('PRODUCTION') in ('1', 'true', 'yes')
+
 # 10% overhead
 HAIL_SERVICE_FEE = 0.05
 ANALYSIS_RUNNER_PROJECT_ID = 'analysis-runner'
@@ -44,6 +50,21 @@ HAIL_JOBS_API = HAIL_BASE + '/api/v1alpha/batches/{batch_id}/jobs/resources'
 bigquery_client = bq.Client()
 # pyliny: disable=invalid-name
 T = TypeVar('T')
+
+
+def retry_transient_errors_with_exponential_backoff(
+    method, errors, attempts=5, *args, **kwargs
+):
+    """
+    Retry a function with exponential backoff.
+    """
+    for attempt in range(1, attempts + 1):
+        try:
+            return method(*args, **kwargs)
+        except errors as e:
+            if attempt == attempts:
+                raise e
+            time.sleep(2 ** attempt)
 
 
 def chunk(iterable: Sequence[T], chunk_size=50) -> Iterator[Sequence[T]]:
@@ -101,6 +122,9 @@ def get_hail_token():
     Get Hail token from local tokens file
     TODO: look at env var for deploy
     """
+    # assert SOURCE_GCP_PROJECT
+    # return read_secret(SOURCE_GCP_PROJECT, 'hail-token')
+
     with open(os.path.expanduser('~/.hail/tokens.json')) as f:
         config = json.load(f)
         return config['default']
@@ -205,8 +229,26 @@ async def get_jobs_for_batch(batch_id, token: str) -> List[str]:
     return jobs
 
 
+RE_matcher = re.compile(r'-\d+$')
+
+
+def billing_row_to_topic(row, dataset_to_gcp_map) -> Optional[str]:
+    """Convert a billing row to a dataset"""
+    project_id = row['project']['id']
+    topic = dataset_to_gcp_map.get(project_id, project_id)
+    if not topic:
+        return 'admin'
+
+    topic = RE_matcher.sub('', topic)
+    return topic
+
+
 def insert_new_rows_in_table(table: str, obj: List[Dict[str, Any]]) -> int:
     """Insert JSON rows into a BQ table"""
+
+    if not obj:
+        logging.info('Not inserting any rows')
+        return 0
 
     _query = f"""
         SELECT id FROM `{table}`
@@ -469,13 +511,12 @@ def process_default_start_and_end(start, end) -> Tuple[datetime, datetime]:
     """
     Process the start and end times.
     """
-    if not start:
-        start = (
-            datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-            - DEFAULT_RANGE_INTERVAL
-        )
     if not end:
+        # start of today
         end = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+
+    if not start:
+        start = end - DEFAULT_RANGE_INTERVAL
 
     assert isinstance(start, datetime) and isinstance(end, datetime)
     return start, end
@@ -501,3 +542,63 @@ def read_secret(project_id: str, secret_name: str) -> Optional[str]:
         request={'name': f'{secret_path}/versions/latest'}
     )
     return response.payload.data.decode('UTF-8')
+
+
+def get_entry(
+    key: str,
+    topic: str,
+    service_id: str,
+    description: str,
+    cost: float,
+    currency_conversion_rate: float,
+    usage: float,
+    batch_resource: str,
+    start_time: datetime,
+    end_time: datetime,
+    labels: Dict[str, str] = None,
+) -> Dict[str, Any]:
+
+    assert labels is None or isinstance(labels, dict)
+
+    _labels = (
+        [
+            {'key': k, 'value': str(v).encode('ascii', 'ignore').decode()}
+            for k, v in labels.items()
+        ]
+        if labels
+        else []
+    )
+    return {
+        'id': key,
+        'topic': topic,
+        'service': {'id': service_id, 'description': description},
+        'sku': {
+            'id': f'hail-{batch_resource}',
+            'description': batch_resource,
+        },
+        'usage_start_time': to_bq_time(start_time),
+        'usage_end_time': to_bq_time(end_time),
+        'project': None,
+        'labels': _labels,
+        'system_labels': [],
+        'location': {
+            'location': 'australia-southeast1',
+            'country': 'Australia',
+            'region': 'australia',
+            'zone': None,
+        },
+        'export_time': to_bq_time(datetime.now()),
+        'cost': cost,
+        'currency': 'AUD',
+        'currency_conversion_rate': currency_conversion_rate,
+        'usage': {
+            'amount': usage,
+            'unit': get_unit_for_batch_resource_type(batch_resource),
+            'amount_in_pricing_units': cost,
+            'pricing_unit': 'AUD',
+        },
+        'credits': [],
+        'invoice': {'month': f'{start_time.year}{str(start_time.month).zfill(2)}'},
+        'cost_type': 'regular',
+        'adjustment_info': None,
+    }
