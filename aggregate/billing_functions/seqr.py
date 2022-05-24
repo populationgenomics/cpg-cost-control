@@ -1,4 +1,3 @@
-# pylint: disable=wildcard-imports
 """
 This cloud function runs DAILY, and distributes the cost of
 SEQR on the sample size within SEQR.
@@ -34,10 +33,9 @@ import hashlib
 import os
 import math
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 
 import asyncio
-from black import E
 
 from google.cloud import bigquery
 
@@ -83,7 +81,7 @@ sapi = SampleApi()
 aapi = AnalysisApi()
 
 
-def get_datasets():
+def get_seqr_datasets():
     """
     Get Hail billing projects, same names as dataset
     TOOD: Implement
@@ -482,7 +480,7 @@ async def main(start: datetime = None, end: datetime = None):
     """Main body function"""
     start, end = process_default_start_and_end(start, end)
 
-    projects = get_datasets()
+    projects = get_seqr_datasets()
 
     prop_map = await generate_proportionate_map_of_dataset(start, end, projects)
 
@@ -513,7 +511,7 @@ def get_key_from_batch_job(dataset, batch, job, batch_resource):
 
 
 if __name__ == '__main__':
-    test_start, test_end = None, None
+    test_start, test_end = None, datetime.now()
     # test_start, test_end = datetime(2022, 5, 2), datetime(2022, 5, 5)
 
     asyncio.get_event_loop().run_until_complete(main(start=test_start, end=test_end))
