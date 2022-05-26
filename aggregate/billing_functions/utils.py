@@ -2,23 +2,24 @@
 """
 Class of helper functions for billing aggregate functions
 """
+import asyncio
 import os
 import re
 import json
-from random import random
-import aiohttp
 import logging
-import pandas as pd
-import google.cloud.bigquery as bq
-import time
-
-from io import StringIO
 from pathlib import Path
+from io import StringIO
+from copy import deepcopy
 from collections import defaultdict
 from datetime import datetime, timedelta
+from typing import Dict, List, Any, Iterator, Optional, Sequence, Tuple, TypeVar, Union
+
+import aiohttp
+import pandas as pd
+import google.cloud.bigquery as bq
+
 from google.cloud import secretmanager
 from google.api_core.exceptions import ClientError
-from typing import Dict, List, Any, Iterator, Optional, Sequence, Tuple, TypeVar
 
 logging.basicConfig(level=logging.INFO)
 
@@ -46,25 +47,78 @@ HAIL_UI_URL = HAIL_BASE + '/batches/{batch_id}'
 HAIL_BATCHES_API = HAIL_BASE + '/api/v1alpha/batches'
 HAIL_JOBS_API = HAIL_BASE + '/api/v1alpha/batches/{batch_id}/jobs/resources'
 
+HAIL_PROJECT_FIELD = {
+    "id": "hail-295901",
+    "number": "805950571114",
+    "name": "hail-295901",
+    "labels": [],
+    "ancestry_numbers": "/648561325637/",
+    "ancestors": [
+        {
+            "resource_name": "projects/805950571114",
+            "display_name": "hail-295901",
+        },
+        {
+            "resource_name": "organizations/648561325637",
+            "display_name": "populationgenomics.org.au",
+        },
+    ],
+}
+
+SEQR_PROJECT_FIELD = {
+    "id": "seqr-308602",
+    "number": "1021400127367",
+    "name": "seqr-308602",
+    "labels": [],
+    "ancestry_numbers": "/648561325637/",
+    "ancestors": [
+        {
+            "resource_name": "organizations/648561325637",
+            "display_name": "populationgenomics.org.au",
+        }
+    ],
+}
+
 
 bigquery_client = bq.Client()
 # pyliny: disable=invalid-name
 T = TypeVar('T')
 
 
-def retry_transient_errors_with_exponential_backoff(
-    method, errors, attempts=5, *args, **kwargs
+async def async_retry_transient_get_json_request(
+    url,
+    errors: Union[Exception, Tuple[Exception, ...]],
+    *args,
+    attempts=5,
+    session=None,
+    **kwargs,
 ):
     """
     Retry a function with exponential backoff.
     """
-    for attempt in range(1, attempts + 1):
-        try:
-            return method(*args, **kwargs)
-        except errors as e:
-            if attempt == attempts:
-                raise e
-            time.sleep(2 ** attempt)
+
+    async def inner_block(session):
+        for attempt in range(1, attempts + 1):
+            try:
+                async with session.get(url, *args, **kwargs) as resp:
+                    resp.raise_for_status()
+                    j = await resp.json()
+                    return j
+            except Exception as e:
+                if not isinstance(e, errors):
+                    raise
+                if attempt == attempts:
+                    raise
+
+            t = 2 ** attempt
+            logger.warning(f'Backing off {t} seconds for {url}')
+            asyncio.sleep(t)
+
+    if session:
+        return await inner_block(session)
+
+    async with aiohttp.ClientSession() as session2:
+        return await inner_block(session2)
 
 
 def chunk(iterable: Sequence[T], chunk_size=50) -> Iterator[Sequence[T]]:
@@ -122,12 +176,57 @@ def get_hail_token():
     Get Hail token from local tokens file
     TODO: look at env var for deploy
     """
-    # assert SOURCE_GCP_PROJECT
-    # return read_secret(SOURCE_GCP_PROJECT, 'hail-token')
+    if os.getenv('DEV') in ('1', 'true', 'yes'):
+        with open(os.path.expanduser('~/.hail/tokens.json')) as f:
+            config = json.load(f)
+            return config['default']
 
-    with open(os.path.expanduser('~/.hail/tokens.json')) as f:
-        config = json.load(f)
-        return config['default']
+    assert SOURCE_GCP_PROJECT
+    return read_secret(SOURCE_GCP_PROJECT, 'hail-token')
+
+
+def get_hail_credits(entries) -> List[Dict[str, Any]]:
+    """
+    Get a hail credit for each entry
+    """
+
+    hail_credits = [deepcopy(e) for e in entries]
+    for entry in hail_credits:
+
+        entry['topic'] = 'hail'
+        entry['id'] += '-credit'
+        entry['cost'] = -entry['cost']
+        entry['service'] = {
+            'id': 'aggregated-credit',
+            'description': 'Hail credit to correctly account for costs',
+        }
+        entry['sku']['id'] += '-credit'
+        entry['sku']['description'] += '-credit'
+        entry['project'] = HAIL_PROJECT_FIELD
+
+    return hail_credits
+
+
+def get_seqr_credits(entries) -> List[Dict[str, Any]]:
+    """
+    Get a hail credit for each entry
+    """
+
+    seqr_credits = [deepcopy(e) for e in entries]
+    for entry in seqr_credits:
+
+        entry['topic'] = 'seqr'
+        entry['id'] += '-credit'
+        entry['cost'] = -entry['cost']
+        entry['service'] = {
+            'id': 'aggregated-credit',
+            'description': 'Seqr credit to correctly account for costs',
+        }
+        entry['sku']['id'] += '-credit'
+        entry['sku']['description'] += '-credit'
+        entry['project'] = SEQR_PROJECT_FIELD
+
+    return seqr_credits
 
 
 async def get_batches(billing_project: str, last_batch_id: any, token: str):
@@ -139,13 +238,11 @@ async def get_batches(billing_project: str, last_batch_id: any, token: str):
     if last_batch_id:
         q += f'&last_batch_id={last_batch_id}'
 
-    async with aiohttp.ClientSession() as session:
-        async with session.get(
-            HAIL_BATCHES_API + q, headers={'Authorization': 'Bearer ' + token}
-        ) as resp:
-            resp.raise_for_status()
-
-            return await resp.json()
+    return await async_retry_transient_get_json_request(
+        HAIL_BATCHES_API + q,
+        aiohttp.ClientError,
+        headers={'Authorization': 'Bearer ' + token},
+    )
 
 
 async def get_finished_batches_for_date(
@@ -201,7 +298,7 @@ async def get_jobs_for_batch(batch_id, token: str) -> List[str]:
     last_job_id = None
     end = False
     iterations = 0
-    async with aiohttp.ClientSession() as client:
+    async with aiohttp.ClientSession() as session:
         while not end:
             iterations += 1
 
@@ -212,19 +309,20 @@ async def get_jobs_for_batch(batch_id, token: str) -> List[str]:
             if last_job_id:
                 q += f'&last_job_id={last_job_id}'
             url = HAIL_JOBS_API.format(batch_id=batch_id) + q
-            async with client.get(
-                url, headers={'Authorization': 'Bearer ' + token}
-            ) as response:
-                response.raise_for_status()
 
-                jresponse = await response.json()
-                new_last_job_id = jresponse.get('last_job_id')
-                if new_last_job_id is None:
-                    end = True
-                elif last_job_id and new_last_job_id <= last_job_id:
-                    raise ValueError('Something fishy with last job id')
-                last_job_id = new_last_job_id
-                jobs.extend(jresponse['jobs'])
+            jresponse = await async_retry_transient_get_json_request(
+                url,
+                aiohttp.ClientError,
+                session=session,
+                headers={'Authorization': 'Bearer ' + token},
+            )
+            new_last_job_id = jresponse.get('last_job_id')
+            if new_last_job_id is None:
+                end = True
+            elif last_job_id and new_last_job_id <= last_job_id:
+                raise ValueError('Something fishy with last job id')
+            last_job_id = new_last_job_id
+            jobs.extend(jresponse['jobs'])
 
     return jobs
 
@@ -260,7 +358,7 @@ def insert_new_rows_in_table(table: str, obj: List[Dict[str, Any]]) -> int:
         counter = defaultdict(int)
         for o in obj:
             counter[o['id']] += 1
-        duplicates = [k for k, v in counter.items() if v > 1]
+        duplicates = [f'{k} ({v})' for k, v in counter.items() if v > 1]
         raise ValueError(
             'There are multiple rows with the same id: ' + ', '.join(duplicates)
         )

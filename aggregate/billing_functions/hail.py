@@ -31,13 +31,12 @@ Tasks:
         (ie: finished between START + END of previous time period)
 """
 import json
-from copy import deepcopy
 import math
 import logging
 import asyncio
 from collections import defaultdict
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Dict, List
 
 from cpg_utils.cloud import read_secret
 
@@ -49,24 +48,6 @@ except ImportError:
 
 SERVICE_ID = 'hail'
 logging.basicConfig(level=logging.INFO)
-
-HAIL_PROJECT_FIELD = {
-    "id": "hail-295901",
-    "number": "805950571114",
-    "name": "hail-295901",
-    "labels": [],
-    "ancestry_numbers": "/648561325637/",
-    "ancestors": [
-        {
-            "resource_name": "projects/805950571114",
-            "display_name": "hail-295901",
-        },
-        {
-            "resource_name": "organizations/648561325637",
-            "display_name": "populationgenomics.org.au",
-        },
-    ],
-}
 
 
 def get_billing_projects():
@@ -142,28 +123,6 @@ def get_finalised_entries_for_batch(dataset, batch: dict) -> List[Dict]:
     return entries
 
 
-def get_hail_credits(entries) -> List[Dict[str, Any]]:
-    """
-    Get a hail credit for each entry
-    """
-
-    hail_credits = [deepcopy(e) for e in entries]
-    for entry in hail_credits:
-
-        entry['topic'] = 'hail'
-        entry['id'] += '-credit'
-        entry['cost'] = -entry['cost']
-        entry['service'] = {
-            'id': 'aggregated-credit',
-            'description': 'Hail credit to correctly account for costs',
-        }
-        entry['sku']['id'] += '-credit'
-        entry['sku']['description'] += '-credit'
-        entry['project'] = HAIL_PROJECT_FIELD
-
-    return hail_credits
-
-
 async def process_and_finalise_entries_for(bp, start, end, token) -> int:
     """
     For a given billing project, get all the batches completed in (start, end]
@@ -187,12 +146,10 @@ async def process_and_finalise_entries_for(bp, start, end, token) -> int:
 
         for batch_group_group in chunk(btch_grp, final_chnk_size):
             chnk_counter += 1
-            min_batch = min(batch_group_group, key=lambda b: b['time_created'])
-            max_batch = max(batch_group_group, key=lambda b: b['time_created'])
+            times = [b['time_created'] for b in batch_group_group]
+            min_batch = min(times)
+            max_batch = max(times)
 
-            for batch in batch_group_group:
-                entries.extend(get_finalised_entries_for_batch(bp, batch))
-                jobs_in_batch.extend(batch['jobs'])
             if len(batches) > 100:
                 logger.info(
                     f'{bp} :: Getting jobs for batch chunk {chnk_counter}/{nchnks} [{min_batch}, {max_batch}]'
@@ -213,7 +170,7 @@ async def process_and_finalise_entries_for(bp, start, end, token) -> int:
         logger.info(f'{bp} :: Inserting {len(entries)} entries')
         result += insert_new_rows_in_table(table=GCP_AGGREGATE_DEST_TABLE, obj=entries)
 
-    return entries
+    return result
 
 
 def from_request(request):
@@ -245,6 +202,7 @@ async def migrate_hail_data(start, end, token):
 
 async def main(start: datetime = None, end: datetime = None) -> int:
     """Main body function"""
+
     start, end = process_default_start_and_end(start, end)
 
     hail_token = get_hail_token()
@@ -258,7 +216,7 @@ async def main(start: datetime = None, end: datetime = None) -> int:
 
 
 if __name__ == '__main__':
-    # test_start, test_end = None, None
-    test_start, test_end = datetime(2022, 4, 1), datetime(2022, 5, 3)
+    test_start, test_end = None, None
+    # test_start, test_end = datetime(2022, 4, 1), datetime(2022, 5, 3)
 
     asyncio.get_event_loop().run_until_complete(main(start=test_start, end=test_end))

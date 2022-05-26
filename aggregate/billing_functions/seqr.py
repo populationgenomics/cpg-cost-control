@@ -1,4 +1,3 @@
-# pylint: disable=wildcard-imports
 """
 This cloud function runs DAILY, and distributes the cost of
 SEQR on the sample size within SEQR.
@@ -34,12 +33,13 @@ import hashlib
 import os
 import math
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 
 import asyncio
-from black import E
 
 from google.cloud import bigquery
+from requests import request
+import requests
 
 from sample_metadata.apis import SampleApi, ProjectApi, AnalysisApi
 from sample_metadata.model.sequence_type import SequenceType
@@ -59,14 +59,6 @@ ProportionateMapType = List[Tuple[datetime, Dict[str, float]]]
 SERVICE_ID = 'seqr'
 SEQR_HAIL_BILLING_PROJECT = 'seqr'
 
-SEQR_PROJECT_FIELD = {
-    "id": "seqr-308602",
-    "number": "1021400127367",
-    "name": "seqr-308602",
-    "labels": [],
-    "ancestry_numbers": "/648561325637/",
-    "ancestors": [],
-}
 
 GCP_BILLING_BQ_TABLE = (
     'billing-admin-290403.billing.gcp_billing_export_v1_01D012_20A6A2_CBD343'
@@ -83,11 +75,19 @@ sapi = SampleApi()
 aapi = AnalysisApi()
 
 
-def get_datasets():
+def get_seqr_datasets():
     """
     Get Hail billing projects, same names as dataset
     TOOD: Implement
     """
+
+    # response = requests.get(
+    #     'https://raw.githubusercontent.com/populationgenomics/analysis-runner/main/stack/Pulumi.seqr.yaml'
+    # )
+    # response.raise_for_status()
+
+    # return response.text()['datasets']
+
     return [
         "acute-care",
         "perth-neuro",
@@ -139,7 +139,7 @@ def from_pubsub(data=None, context=None):
 
 
 async def migrate_entries_from_hail_batch(
-    start: datetime, end: datetime, proportion_map: ProportionateMapType
+    start: datetime, end: datetime, proportion_map: ProportionateMapType, dry_run=False
 ) -> int:
     token = get_hail_token()
     result = 0
@@ -179,7 +179,12 @@ async def migrate_entries_from_hail_batch(
 
             entries.extend(get_finalised_entries_for_batch(batch, proportion_map))
 
-        result += insert_new_rows_in_table(table=GCP_AGGREGATE_DEST_TABLE, obj=entries)
+        if dry_run:
+            result = len(entries)
+        else:
+            result += insert_new_rows_in_table(
+                table=GCP_AGGREGATE_DEST_TABLE, obj=entries
+            )
 
     return result
 
@@ -301,10 +306,14 @@ def get_finalised_entries_for_batch(
                 )
             )
 
+    entries.extend(get_hail_credits(entries))
+
     return entries
 
 
-def migrate_entries_from_bq(start, end, prop_map: ProportionateMapType) -> int:
+def migrate_entries_from_bq(
+    start, end, prop_map: ProportionateMapType, dry_run=False
+) -> int:
     _query = f"""
         SELECT * FROM `{GCP_BILLING_BQ_TABLE}`
         WHERE export_time >= @start
@@ -324,7 +333,7 @@ def migrate_entries_from_bq(start, end, prop_map: ProportionateMapType) -> int:
     df = bigquery_client.query(_query, job_config=job_config).result().to_dataframe()
     json_obj = json.loads(df.to_json(orient='records'))
 
-    entries = []
+    entries_by_id = {}
     result = 0
     param_map, current_date = None, None
     for obj in json_obj:
@@ -339,60 +348,73 @@ def migrate_entries_from_bq(start, end, prop_map: ProportionateMapType) -> int:
             # use and abuse the
             param_map = get_ratios_from_date(usage_start_time, prop_map)
 
+        labels = obj['labels']
+
         for dataset, ratio in param_map.items():
 
-            new_entry = {
-                **obj,
-                'topic': dataset,
-            }
+            new_entry = deepcopy(obj)
 
-            new_entry['labels'].append({'key': 'proportion', 'value': ratio})
+            new_entry['topic'] = dataset
+            new_entry['service']['id'] = SERVICE_ID
+            new_entry['labels'] = [*labels, {'key': 'proportion', 'value': ratio}]
             new_entry['cost'] *= ratio
+
+            dates = ['usage_start_time', 'usage_end_time', 'export_time']
+            for k in dates:
+                new_entry[k] = to_bq_time(datetime.fromtimestamp(int(obj[k] / 1000)))
 
             new_entry['id'] = '-'.join(
                 [SERVICE_ID, dataset, billing_row_to_key(new_entry)]
             )
 
-            entries.append(new_entry)
+            if new_entry['id'] in entries_by_id:
+                if new_entry != entries_by_id[new_entry['id']]:
+                    print(
+                        f'WARNING: duplicate entry {new_entry["id"]} with different values'
+                    )
+                continue
 
-        if len(entries) > 500:
+            entries_by_id[new_entry['id']] = new_entry
+
+        if len(entries_by_id) > 10000:
+
             # insert all entries here
-            continue
+            credit_entries = {
+                e['id']: e for e in get_seqr_credits(entries_by_id.values())
+            }
+            entries_by_id.update(credit_entries)
+
+            if len(entries_by_id) != 2 * len(credit_entries):
+                logger.warning('Mismatched length of credits')
+            if dry_run:
+                result += len(entries_by_id)
+            else:
+                result += insert_new_rows_in_table(
+                    table=GCP_AGGREGATE_DEST_TABLE, obj=entries_by_id.values()
+                )
+            entries_by_id = {}
+
+    if entries_by_id:
+        entries_by_id.update(
+            {e['id']: e for e in get_seqr_credits(entries_by_id.values())}
+        )
+        if dry_run:
+            result += len(entries_by_id)
+        else:
+            result += insert_new_rows_in_table(
+                table=GCP_AGGREGATE_DEST_TABLE, obj=entries_by_id.values()
+            )
 
     return result
 
 
 def billing_row_to_key(row) -> str:
     """Convert a billing row to a hash which will be the row key"""
-    data = tuple(row)
     identifier = hashlib.md5()
-
-    for item in data:
-        identifier.update(str(item).encode('utf-8'))
+    for k, v in row.items():
+        identifier.update((k + str(v)).encode('utf-8'))
 
     return identifier.hexdigest()
-
-
-def get_seqr_credits(entries) -> List[Dict[str, Any]]:
-    """
-    Get a hail credit for each entry
-    """
-
-    seqr_credits = [deepcopy(e) for e in entries]
-    for entry in seqr_credits:
-
-        entry['topic'] = 'seqr'
-        entry['id'] += '-credit'
-        entry['cost'] = -entry['cost']
-        entry['service'] = {
-            'id': 'aggregated-credit',
-            'description': 'Seqr credit to correctly account for costs',
-        }
-        entry['sku']['id'] += '-credit'
-        entry['sku']['description'] += '-credit'
-        entry['project'] = SEQR_PROJECT_FIELD
-
-    return seqr_credits
 
 
 async def generate_proportionate_map_of_dataset(
@@ -446,7 +468,14 @@ async def generate_proportionate_map_of_dataset(
 
     s = datetime.now()
     for analysis in relevant_analysis:
-        dt = datetime.fromisoformat(analysis['timestamp_completed'])
+
+        # Using timestamp_completed as the start time for the propmap
+        # is a small problem because then this script won't charge the new samples
+        # for the current joint-call as:
+        #   joint_call.completed_timestamp > hail_joint_call.started_timestamp
+        # We might be able to roughly accept this by subtracting a day from the joint-call,
+        # and sort of hope that no joint-call runs over 24 hours.
+        dt = datetime.fromisoformat(analysis['timestamp_completed']) - timedelta(days=1)
         samples = analysis['sample_ids']
 
         size_per_project = defaultdict(int)
@@ -472,27 +501,34 @@ async def generate_proportionate_map_of_dataset(
             )
         )
 
-    print('Missing crams: ' + ', '.join(missing_samples))
-    print('Missing sizes: ' + ', '.join(f'{k} ({v})' for k, v in missing_sizes.items()))
+    if missing_samples:
+        print('Missing crams: ' + ', '.join(missing_samples))
+    if missing_sizes:
+        print(
+            'Missing sizes: '
+            + ', '.join(f'{k} ({v})' for k, v in missing_sizes.items())
+        )
 
     return sorted(proportioned_datasets, key=lambda x: x[0])
 
 
-async def main(start: datetime = None, end: datetime = None):
+async def main(start: datetime = None, end: datetime = None, dry_run=False):
     """Main body function"""
     start, end = process_default_start_and_end(start, end)
 
-    projects = get_datasets()
+    projects = get_seqr_datasets()
 
     prop_map = await generate_proportionate_map_of_dataset(start, end, projects)
 
-    entry_items = migrate_entries_from_bq(start, end, prop_map)
-    entry_items = await get_entries_from_hail(start, end, prop_map)
+    result = migrate_entries_from_bq(start, end, prop_map, dry_run=dry_run)
+    result += await migrate_entries_from_hail_batch(
+        start, end, prop_map, dry_run=dry_run
+    )
 
-    print(len(entry_items))
-
-    # Insert new rows into aggregation table
-    # insert_new_rows_in_table(table=GCP_AGGREGATE_DEST_TABLE, obj=entry_items)
+    if dry_run:
+        print(f'Finished dry run, would have inserted {result} entries')
+    else:
+        print(f'Inserted {result} entries')
 
 
 def get_key_from_batch_job(dataset, batch, job, batch_resource):
