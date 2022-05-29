@@ -585,7 +585,7 @@ def get_key_from_batch_job(dataset, batch, job, batch_resource):
 
 
 if __name__ == '__main__':
-    test_start, test_end = None, None
+    test_start, test_end = None, datetime.now()
     # test_start, test_end = datetime(2022, 5, 2), datetime(2022, 5, 5)
 
     asyncio.get_event_loop().run_until_complete(
