@@ -1,4 +1,4 @@
-# pyliny: disable=global-statement
+# pylint: disable=global-statement,too-many-arguments
 """
 Class of helper functions for billing aggregate functions
 """
@@ -32,8 +32,9 @@ GCP_BILLING_BQ_TABLE = (
     f'{GCP_PROJECT}.billing.gcp_billing_export_v1_01D012_20A6A2_CBD343'
 )
 GCP_AGGREGATE_DEST_TABLE = os.getenv('GCP_AGGREGATE_DEST_TABLE')
-logging.info('GCP_AGGREGATE_DEST_TABLE: {}'.format(GCP_AGGREGATE_DEST_TABLE))
+
 assert GCP_AGGREGATE_DEST_TABLE
+logging.info('GCP_AGGREGATE_DEST_TABLE: {}'.format(GCP_AGGREGATE_DEST_TABLE))
 
 IS_PRODUCTION = os.getenv('PRODUCTION') in ('1', 'true', 'yes')
 
@@ -49,40 +50,40 @@ HAIL_BATCHES_API = HAIL_BASE + '/api/v1alpha/batches'
 HAIL_JOBS_API = HAIL_BASE + '/api/v1alpha/batches/{batch_id}/jobs/resources'
 
 HAIL_PROJECT_FIELD = {
-    "id": "hail-295901",
-    "number": "805950571114",
-    "name": "hail-295901",
-    "labels": [],
-    "ancestry_numbers": "/648561325637/",
-    "ancestors": [
+    'id': 'hail-295901',
+    'number': '805950571114',
+    'name': 'hail-295901',
+    'labels': [],
+    'ancestry_numbers': '/648561325637/',
+    'ancestors': [
         {
-            "resource_name": "projects/805950571114",
-            "display_name": "hail-295901",
+            'resource_name': 'projects/805950571114',
+            'display_name': 'hail-295901',
         },
         {
-            "resource_name": "organizations/648561325637",
-            "display_name": "populationgenomics.org.au",
+            'resource_name': 'organizations/648561325637',
+            'display_name': 'populationgenomics.org.au',
         },
     ],
 }
 
 SEQR_PROJECT_FIELD = {
-    "id": "seqr-308602",
-    "number": "1021400127367",
-    "name": "seqr-308602",
-    "labels": [],
-    "ancestry_numbers": "/648561325637/",
-    "ancestors": [
+    'id': 'seqr-308602',
+    'number': '1021400127367',
+    'name': 'seqr-308602',
+    'labels': [],
+    'ancestry_numbers': '/648561325637/',
+    'ancestors': [
         {
-            "resource_name": "organizations/648561325637",
-            "display_name": "populationgenomics.org.au",
+            'resource_name': 'organizations/648561325637',
+            'display_name': 'populationgenomics.org.au',
         }
     ],
 }
 
 
 bigquery_client = bq.Client()
-# pyliny: disable=invalid-name
+# pylint: disable=invalid-name
 T = TypeVar('T')
 
 
@@ -105,6 +106,7 @@ async def async_retry_transient_get_json_request(
                     resp.raise_for_status()
                     j = await resp.json()
                     return j
+            # pylint: disable=broad-except
             except Exception as e:
                 if not isinstance(e, errors):
                     raise
@@ -679,6 +681,9 @@ def get_entry(
     end_time: datetime,
     labels: Dict[str, str] = None,
 ) -> Dict[str, Any]:
+    """
+    Get well formed entry dictionary from keys
+    """
 
     assert labels is None or isinstance(labels, dict)
 

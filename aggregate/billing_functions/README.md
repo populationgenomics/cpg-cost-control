@@ -5,7 +5,7 @@
 
 To test locally, must have following packages installed
 
-```
+```shell
 pip install \
     pandas \
     pyarrow \

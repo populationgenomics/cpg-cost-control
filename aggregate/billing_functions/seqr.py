@@ -1,3 +1,4 @@
+# pylint: disable=logging-format-interpolation
 """
 This cloud function runs DAILY, and distributes the cost of
 SEQR on the sample size within SEQR.
@@ -27,31 +28,30 @@ TO DO :
 - Getting latest cram for sample by sequence type (eg: exome / genome)
 """
 
+
+# write some code here
+
+import json
+import math
+import hashlib
 from collections import defaultdict
 from copy import deepcopy
-import hashlib
-import os
-import math
-import json
-from datetime import datetime
+from datetime import datetime, timedelta
+from typing import List, Tuple, Dict, Any
 
 import asyncio
 
-from google.cloud import bigquery
-from requests import request
-import requests
+import google.cloud.bigquery as bq
 
 from sample_metadata.apis import SampleApi, ProjectApi, AnalysisApi
-from sample_metadata.model.sequence_type import SequenceType
 from sample_metadata.model.analysis_type import AnalysisType
 from sample_metadata.model.analysis_status import AnalysisStatus
 from sample_metadata.model.analysis_query_model import AnalysisQueryModel
 
-
 try:
-    from .utils import *
+    from . import utils
 except ImportError:
-    from utils import *
+    import utils
 
 
 ProportionateMapType = List[Tuple[datetime, Dict[str, float]]]
@@ -69,7 +69,8 @@ BASE = 'https://batch.hail.populationgenomics.org.au'
 BATCHES_API = BASE + '/api/v1alpha/batches'
 JOBS_API = BASE + '/api/v1alpha/batches/{batch_id}/jobs/resources'
 
-bigquery_client = bigquery.Client()
+logger = utils.logger
+
 papi = ProjectApi()
 sapi = SampleApi()
 aapi = AnalysisApi()
@@ -82,28 +83,29 @@ def get_seqr_datasets():
     """
 
     # response = requests.get(
-    #     'https://raw.githubusercontent.com/populationgenomics/analysis-runner/main/stack/Pulumi.seqr.yaml'
+    #     'https://raw.githubusercontent.com/populationgenomics/
+    #          analysis-runner/main/stack/Pulumi.seqr.yaml'
     # )
     # response.raise_for_status()
 
     # return response.text()['datasets']
 
     return [
-        "acute-care",
-        "perth-neuro",
-        # "rdnow",
-        "heartkids",
-        "ravenscroft-rdstudy",
-        # "ohmr3-mendelian",
-        # "ohmr4-epilepsy",
-        # "flinders-ophthal",
-        "circa",
-        # "schr-neuro",
-        # "brain-malf",
-        # "leukodystrophies",
-        # "mito-disease",
-        "ravenscroft-arch",
-        "hereditary-neuro",
+        'acute-care',
+        'perth-neuro',
+        # 'rdnow',
+        'heartkids',
+        'ravenscroft-rdstudy',
+        # 'ohmr3-mendelian',
+        # 'ohmr4-epilepsy',
+        # 'flinders-ophthal',
+        'circa',
+        # 'schr-neuro',
+        # 'brain-malf',
+        # 'leukodystrophies',
+        # 'mito-disease',
+        'ravenscroft-arch',
+        'hereditary-neuro',
     ]
 
 
@@ -111,7 +113,7 @@ def from_request(request):
     """
     From request object, get start and end time if present
     """
-    start, end = get_start_and_end_from_request(request)
+    start, end = utils.get_start_and_end_from_request(request)
     asyncio.get_event_loop().run_until_complete(main(start, end))
 
 
@@ -130,21 +132,27 @@ def get_ratios_from_date(
     raise AssertionError(f'No ratio found for date {date}')
 
 
-def from_pubsub(data=None, context=None):
+def from_pubsub(data=None, _=None):
     """
     From pubsub message, get start and end time if present
     """
-    start, end = get_start_and_end_from_data(data)
+    start, end = utils.get_start_and_end_from_data(data)
     main(start, end)
 
 
 async def migrate_entries_from_hail_batch(
     start: datetime, end: datetime, proportion_map: ProportionateMapType, dry_run=False
 ) -> int:
-    token = get_hail_token()
+    """
+    Migrate all the seqr entries from hail batch,
+    and insert them into the aggregate table.
+
+    Break them down by dataset, and then proportion the rest of the costs.
+    """
+    token = utils.get_hail_token()
     result = 0
 
-    batches = await get_finished_batches_for_date(
+    batches = await utils.get_finished_batches_for_date(
         start=start, end=end, token=token, billing_project=SEQR_HAIL_BILLING_PROJECT
     )
     if len(batches) == 0:
@@ -155,22 +163,25 @@ async def migrate_entries_from_hail_batch(
     final_chnk_size = 30
     nchnks = math.ceil(len(batches) / 500) * final_chnk_size
     jobs_in_batch = []
-    for btch_grp in chunk(batches, 500):
+    for btch_grp in utils.chunk(batches, 500):
         jobs_in_batch = []
         entries = []
 
-        for batch_group_group in chunk(btch_grp, final_chnk_size):
+        for batch_group_group in utils.chunk(btch_grp, final_chnk_size):
             chnk_counter += 1
-            min_batch = min(batch_group_group, key=lambda b: b['time_created'])
-            max_batch = max(batch_group_group, key=lambda b: b['time_created'])
+            times = [b['time_created'] for b in batch_group_group]
+            min_batch = min(times)
+            max_batch = max(times)
 
             if len(batches) > 100:
                 logger.info(
                     f'seqr :: Getting jobs for batch chunk {chnk_counter}/{nchnks} '
-                    f'[{min_batch["time_created"]}, {max_batch["time_created"]}]'
+                    f'[{min_batch}, {max_batch}]'
                 )
 
-            promises = [get_jobs_for_batch(b['id'], token) for b in batch_group_group]
+            promises = [
+                utils.get_jobs_for_batch(b['id'], token) for b in batch_group_group
+            ]
             jobs_in_batch.extend(await asyncio.gather(*promises))
 
         # insert all entries for this batch
@@ -182,8 +193,8 @@ async def migrate_entries_from_hail_batch(
         if dry_run:
             result = len(entries)
         else:
-            result += insert_new_rows_in_table(
-                table=GCP_AGGREGATE_DEST_TABLE, obj=entries
+            result += utils.insert_new_rows_in_table(
+                table=utils.GCP_AGGREGATE_DEST_TABLE, obj=entries
             )
 
     return result
@@ -192,26 +203,32 @@ async def migrate_entries_from_hail_batch(
 def get_finalised_entries_for_batch(
     batch, proportion_map: ProportionateMapType
 ) -> List[Dict[str, Any]]:
+    """
+    Get finalised entries for a batch
+    """
+
     batch_id = batch['id']
     batch_name = batch.get('attributes', {}).get('name')
 
-    start_time = parse_hail_time(batch['time_created'])
-    end_time = parse_hail_time(batch['time_completed'])
+    start_time = utils.parse_hail_time(batch['time_created'])
+    end_time = utils.parse_hail_time(batch['time_completed'])
     prop_map = get_ratios_from_date(start_time, proportion_map)
+
+    currency_conversion_rate = utils.get_currency_conversion_rate_for_time(start_time)
 
     jobs_with_no_dataset: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
     entries: List[Dict[str, Any]] = []
 
     for job in batch['jobs']:
-        dataset = job['attributes'].get('dataset', '').replace("-test", "")
+        dataset = job['attributes'].get('dataset', '').replace('-test', '')
         if not dataset:
-            jobs_with_no_dataset.append((batch, job))
+            jobs_with_no_dataset.append(job)
             continue
 
         sample = job['attributes'].get('sample')
         job_name = job['attributes'].get('name')
 
-        hail_ui_url = HAIL_UI_URL.replace('{batch_id}', str(batch_id))
+        hail_ui_url = utils.HAIL_UI_URL.replace('{batch_id}', str(batch_id))
 
         labels = {
             'dataset': dataset,
@@ -222,8 +239,6 @@ def get_finalised_entries_for_batch(
         }
         if sample:
             labels['sample'] = sample
-
-        currency_conversion_rate = get_currency_conversion_rate_for_time(start_time)
 
         resources = job['resources']
         if not resources:
@@ -236,12 +251,12 @@ def get_finalised_entries_for_batch(
             labels['batch_resource'] = batch_resource
             labels['url'] = hail_ui_url
 
-            cost = currency_conversion_rate * get_usd_cost_for_resource(
+            cost = currency_conversion_rate * utils.get_usd_cost_for_resource(
                 batch_resource, usage
             )
 
             entries.append(
-                get_entry(
+                utils.get_entry(
                     key=get_key_from_batch_job(dataset, batch, job, batch_resource),
                     topic=dataset,
                     service_id=SERVICE_ID,
@@ -257,10 +272,7 @@ def get_finalised_entries_for_batch(
             )
 
     extra_job_resources = defaultdict(int)
-    for batch, job in jobs_with_no_dataset:
-
-        start_time = parse_hail_time(batch['time_created'])
-        currency_conversion_rate = get_currency_conversion_rate_for_time(start_time)
+    for job in jobs_with_no_dataset:
 
         for batch_resource, usage in job['resources'].items():
             if batch_resource.startswith('service-fee'):
@@ -271,7 +283,7 @@ def get_finalised_entries_for_batch(
         for batch_resource, usage in extra_job_resources.items():
 
             batch_id = batch['id']
-            hail_ui_url = HAIL_UI_URL.replace('{batch_id}', str(batch_id))
+            hail_ui_url = utils.HAIL_UI_URL.replace('{batch_id}', str(batch_id))
 
             labels = {
                 'batch_name': batch_name,
@@ -280,7 +292,7 @@ def get_finalised_entries_for_batch(
             labels['batch_resource'] = batch_resource
             labels['url'] = hail_ui_url
 
-            gross_cost = currency_conversion_rate * get_usd_cost_for_resource(
+            gross_cost = currency_conversion_rate * utils.get_usd_cost_for_resource(
                 batch_resource, usage
             )
 
@@ -289,7 +301,7 @@ def get_finalised_entries_for_batch(
                 cost = gross_cost * fraction
 
                 entries.append(
-                    get_entry(
+                    utils.get_entry(
                         key='-'.join(
                             [
                                 SERVICE_ID,
@@ -316,7 +328,7 @@ def get_finalised_entries_for_batch(
                     )
                 )
 
-    entries.extend(get_hail_credits(entries))
+    entries.extend(utils.get_hail_credits(entries))
 
     return entries
 
@@ -324,6 +336,10 @@ def get_finalised_entries_for_batch(
 def migrate_entries_from_bq(
     start, end, prop_map: ProportionateMapType, dry_run=False
 ) -> int:
+    """
+    Migrate entries from BQ to GCP, using the given proportionate maps
+    """
+    # pylint: disable=too-many-branches
     _query = f"""
         SELECT * FROM `{GCP_BILLING_BQ_TABLE}`
         WHERE export_time >= @start
@@ -340,7 +356,11 @@ def migrate_entries_from_bq(
         ]
     )
 
-    df = bigquery_client.query(_query, job_config=job_config).result().to_dataframe()
+    df = (
+        utils.bigquery_client.query(_query, job_config=job_config)
+        .result()
+        .to_dataframe()
+    )
     json_obj = json.loads(df.to_json(orient='records'))
 
     entries_by_id = {}
@@ -371,7 +391,9 @@ def migrate_entries_from_bq(
 
             dates = ['usage_start_time', 'usage_end_time', 'export_time']
             for k in dates:
-                new_entry[k] = to_bq_time(datetime.fromtimestamp(int(obj[k] / 1000)))
+                new_entry[k] = utils.to_bq_time(
+                    datetime.fromtimestamp(int(obj[k] / 1000))
+                )
 
             new_entry['id'] = '-'.join(
                 [SERVICE_ID, dataset, billing_row_to_key(new_entry)]
@@ -379,8 +401,8 @@ def migrate_entries_from_bq(
 
             if new_entry['id'] in entries_by_id:
                 if new_entry != entries_by_id[new_entry['id']]:
-                    print(
-                        f'WARNING: duplicate entry {new_entry["id"]} with different values'
+                    logger.warning(
+                        f'WARNING: duplicate entry {new_entry["id"]} with diff values'
                     )
                 continue
 
@@ -390,7 +412,7 @@ def migrate_entries_from_bq(
 
             # insert all entries here
             credit_entries = {
-                e['id']: e for e in get_seqr_credits(entries_by_id.values())
+                e['id']: e for e in utils.get_seqr_credits(entries_by_id.values())
             }
             entries_by_id.update(credit_entries)
 
@@ -399,20 +421,20 @@ def migrate_entries_from_bq(
             if dry_run:
                 result += len(entries_by_id)
             else:
-                result += insert_new_rows_in_table(
-                    table=GCP_AGGREGATE_DEST_TABLE, obj=entries_by_id.values()
+                result += utils.insert_new_rows_in_table(
+                    table=utils.GCP_AGGREGATE_DEST_TABLE, obj=entries_by_id.values()
                 )
             entries_by_id = {}
 
     if entries_by_id:
         entries_by_id.update(
-            {e['id']: e for e in get_seqr_credits(entries_by_id.values())}
+            {e['id']: e for e in utils.get_seqr_credits(entries_by_id.values())}
         )
         if dry_run:
             result += len(entries_by_id)
         else:
-            result += insert_new_rows_in_table(
-                table=GCP_AGGREGATE_DEST_TABLE, obj=entries_by_id.values()
+            result += utils.insert_new_rows_in_table(
+                table=utils.GCP_AGGREGATE_DEST_TABLE, obj=entries_by_id.values()
             )
 
     return result
@@ -430,6 +452,10 @@ def billing_row_to_key(row) -> str:
 async def generate_proportionate_map_of_dataset(
     start, finish, projects: List[str]
 ) -> ProportionateMapType:
+    """
+    Generate a proportionate map of datasets from list of samples
+    in the relevant joint-calls (< 2022-06-01) or es-index (>= 2022-06-01)
+    """
 
     # from 2022-06-01, we use it based on es-index, otherwise joint-calling
     relevant_analysis = []
@@ -483,8 +509,8 @@ async def generate_proportionate_map_of_dataset(
         # is a small problem because then this script won't charge the new samples
         # for the current joint-call as:
         #   joint_call.completed_timestamp > hail_joint_call.started_timestamp
-        # We might be able to roughly accept this by subtracting a day from the joint-call,
-        # and sort of hope that no joint-call runs over 24 hours.
+        # We might be able to roughly accept this by subtracting a day from the
+        # joint-call, and sort of hope that no joint-call runs over 24 hours.
         dt = datetime.fromisoformat(analysis['timestamp_completed']) - timedelta(days=1)
         samples = analysis['sample_ids']
 
@@ -524,14 +550,13 @@ async def generate_proportionate_map_of_dataset(
 
 async def main(start: datetime = None, end: datetime = None, dry_run=False):
     """Main body function"""
-    start, end = process_default_start_and_end(start, end)
+    start, end = utils.process_default_start_and_end(start, end)
 
     projects = get_seqr_datasets()
 
     prop_map = await generate_proportionate_map_of_dataset(start, end, projects)
     result = 0
-
-    result += migrate_entries_from_bq(start, end, prop_map, dry_run=dry_run)
+    # result += migrate_entries_from_bq(start, end, prop_map, dry_run=dry_run)
     result += await migrate_entries_from_hail_batch(
         start, end, prop_map, dry_run=dry_run
     )
@@ -563,4 +588,6 @@ if __name__ == '__main__':
     test_start, test_end = None, None
     # test_start, test_end = datetime(2022, 5, 2), datetime(2022, 5, 5)
 
-    asyncio.get_event_loop().run_until_complete(main(start=test_start, end=test_end))
+    asyncio.get_event_loop().run_until_complete(
+        main(start=test_start, end=test_end, dry_run=False)
+    )
