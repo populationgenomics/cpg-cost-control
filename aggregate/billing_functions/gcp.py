@@ -14,55 +14,57 @@ Tasks:
 - Should search and update for [START_PERIOD, END_PERIOD)
 """
 
+import re
 import json
 import hashlib
 import logging
 from datetime import datetime
-import re
 from typing import Dict, Optional
 
-# from cpg_utils.cloud import read_secret
 try:
-    from .utils import *
+    from . import utils
 except ImportError:
-    from utils import *
+    import utils
 
-logging.basicConfig(level=logging.INFO)
+
+logger = utils.logger
 
 
 def from_request(request):
     """
     From request object, get start and end time if present
     """
-    start, end = get_start_and_end_from_request(request)
+    start, end = utils.get_start_and_end_from_request(request)
     main(start, end)
 
 
-def from_pubsub(data=None, context=None):
+def from_pubsub(data=None, _=None):
     """
     From pubsub message, get start and end time if present
     """
-    start, end = get_start_and_end_from_data(data)
+    start, end = utils.get_start_and_end_from_data(data)
     main(start, end)
 
 
 def migrate_billing_data(start, end, dataset_to_gcp_map) -> int:
-    # Get the billing date in the time period
-    # Filter out any rows that aren't in the allowed project ids
+    """
+    Get the billing date in the time period
+    Filter out any rows that aren't in the allowed project ids
+    """
 
     def get_topic(row):
         return billing_row_to_topic(row, dataset_to_gcp_map)
 
     _query = f"""
-        SELECT * FROM `{GCP_BILLING_BQ_TABLE}`
+        SELECT * FROM `{utils.GCP_BILLING_BQ_TABLE}`
         WHERE export_time >= '{start.isoformat()}'
             AND export_time <= '{end.isoformat()}'
     """
 
-    migrate_rows = bigquery_client.query(_query).result().to_dataframe()
+    migrate_rows = utils.bigquery_client.query(_query).result().to_dataframe()
 
     if len(migrate_rows) == 0:
-        logging.info(f"No rows to migrate")
+        logging.info(f'No rows to migrate')
         return 0
 
     # Add id and dataset to the row
@@ -70,14 +72,16 @@ def migrate_billing_data(start, end, dataset_to_gcp_map) -> int:
     migrate_rows.insert(0, 'topic', migrate_rows.apply(get_topic, axis=1))
     migrate_rows.insert(0, 'id', migrate_rows.apply(billing_row_to_key, axis=1))
 
-    result = insert_dataframe_rows_in_table(GCP_AGGREGATE_DEST_TABLE, migrate_rows)
+    result = utils.insert_dataframe_rows_in_table(
+        utils.GCP_AGGREGATE_DEST_TABLE, migrate_rows
+    )
 
     return result
 
 
 def main(start: datetime = None, end: datetime = None) -> int:
     """Main body function"""
-    interval_iterator = get_date_intervals_for(start, end)
+    interval_iterator = utils.get_date_intervals_for(start, end)
 
     # Get the dataset to GCP project map
     dataset_to_gcp_map = get_dataset_to_gcp_map()
@@ -87,11 +91,11 @@ def main(start: datetime = None, end: datetime = None) -> int:
 
     # Migrate the data in batches
     result = 0
-    for start, end in interval_iterator:
-        logging.info(f"Migrating data from {start} to {end}")
-        result += migrate_billing_data(start, end, dataset_to_gcp_map)
+    for s, f in interval_iterator:
+        logging.info(f'Migrating data from {s} to {f}')
+        result += migrate_billing_data(s, f, dataset_to_gcp_map)
 
-    logging.info(f"Migrated a total of {result} rows")
+    logging.info(f'Migrated a total of {result} rows')
 
     return result
 
@@ -123,7 +127,9 @@ def billing_row_to_topic(row, dataset_to_gcp_map) -> Optional[str]:
 
 def get_dataset_to_gcp_map() -> Dict[str, str]:
     """Get the server-config from the secret manager"""
-    server_config = json.loads(read_secret(ANALYSIS_RUNNER_PROJECT_ID, 'server-config'))
+    server_config = json.loads(
+        utils.read_secret(utils.ANALYSIS_RUNNER_PROJECT_ID, 'server-config')
+    )
     return {v['projectId']: k for k, v in server_config.items()}
 
 

@@ -1,5 +1,6 @@
 #!/usr/bin/env python
-
+# Disable rule for that module-level exports be ALL_CAPS, for legibility.
+# pylint: disable=C0103,missing-function-docstring
 """
 Python Pulumi program for creating Google Cloud Functions.
 
@@ -12,89 +13,140 @@ the estimated travel time to a given location, sending the results via SMS.
 import os
 import ast
 import time
-import pulumi
-
-import pulumi_gcp as gcp
-
 from base64 import b64encode
 
-# Disable rule for that module-level exports be ALL_CAPS, for legibility.
-# pylint: disable=C0103
+import pulumi
+import pulumi_gcp as gcp
+
 
 # File path to where the Cloud Function's source code is located.
 PATH_TO_SOURCE_CODE = './'
 
-# Get values from Pulumi config to use as environment variables in our Cloud Function.
-gcp_opts = pulumi.Config(name='gcp')
-opts = pulumi.Config(name='opts')
 
-config_values = {
-    'PROJECT': gcp_opts.get('project'),
-    'REGION': gcp_opts.get('region'),
-    'GCP_AGGREGATE_DEST_TABLE': opts.get('destination'),
-    'FUNCTIONS': opts.get('functions'),
-    'SLACK_AUTH_TOKEN': os.environ.get('SLACK_AUTH_TOKEN'),
-    'SLACK_CHANNEL': opts.get('slack_channel'),
-}
+def main():
+
+    # Get values from Pulumi config to use as
+    # environment variables in our Cloud Function.
+    gcp_opts = pulumi.Config(name='gcp')
+    opts = pulumi.Config(name='opts')
+
+    config_values = {
+        'REGION': gcp_opts.get('region'),
+        'PROJECT': gcp_opts.get('project'),
+        'FUNCTIONS': opts.get('functions'),
+        'SLACK_CHANNEL': opts.get('slack_channel'),
+        'GCP_AGGREGATE_DEST_TABLE': opts.get('destination'),
+        'SLACK_AUTH_TOKEN': os.getenv('SLACK_AUTH_TOKEN'),
+    }
+
+    # Set environment variable to the correct project
+    name = 'aggregate-billing'
+    bucket_name = f'{config_values["PROJECT"]}-{name}'
+
+    # Start by enabling all cloud function services
+    gcp.projects.Service(
+        'cloudfunctions-service',
+        service='cloudfunctions.googleapis.com',
+        disable_on_destroy=False,
+    )
+
+    # We will store the source code to the Cloud Function
+    # in a Google Cloud Storage bucket.
+    function_bucket = gcp.storage.Bucket(
+        bucket_name,
+        name=bucket_name,
+        location=config_values['REGION'],
+        project=config_values['PROJECT'],
+        uniform_bucket_level_access=True,
+    )
+
+    # Deploy all functions
+    pulumi.export('bucket_name', function_bucket.url)
+
+    # The Cloud Function source code itself needs to be zipped up into an
+    # archive, which we create using the pulumi.AssetArchive primitive.
+    archive = archive_folder(PATH_TO_SOURCE_CODE)
+
+    # Create the single Cloud Storage object, which contains all of the function's
+    # source code. ('main.py' and 'requirements.txt'.)
+    source_archive_object = gcp.storage.BucketObject(
+        bucket_name,
+        name=f'{name}-source-archive-{time.time()}',
+        bucket=function_bucket.name,
+        source=archive,
+    )
+
+    # Create Service Account
+    service_account = gcp.serviceaccount.Account(
+        f'Aggregate Billing default service account',
+        account_id=f'{name}',
+        project=config_values['PROJECT'],
+    )
+
+    # Create the Cloud Function, deploying the source we just uploaded to Google
+    # Cloud Storage.
+    functions = ast.literal_eval(config_values['FUNCTIONS'])
+
+    # Create one pubsub to be triggered by the cloud scheduler
+    pubsub = gcp.pubsub.Topic(f'{name}-topic', project=config_values['PROJECT'])
+
+    # Create a cron job to run the function every day at midnight.s
+    job = gcp.cloudscheduler.Job(
+        f'{name}-job',
+        pubsub_target=gcp.cloudscheduler.JobPubsubTargetArgs(
+            topic_name=pubsub.id,
+            data=b64encode_str('Run the functions'),
+        ),
+        schedule='every 24 hours',
+        project=config_values['PROJECT'],
+        region=config_values['REGION'],
+        opts=pulumi.ResourceOptions(depends_on=[pubsub]),
+    )
+
+    pulumi.export('cron_job', job.id)
+
+    # Create slack notificaiton channel for all functions
+    # Use cli command below to retrieve the required 'labels'
+    # $ gcloud beta monitoring channel-descriptors describe slack
+    slack_notification_channel = gcp.monitoring.NotificationChannel(
+        f"{name}-slack-notification-channel",
+        display_name=f"{name.capitalize()} Slack Notification Channel",
+        type="slack",
+        labels={
+            'auth_token': config_values['SLACK_AUTH_TOKEN'],
+            'channel_name': config_values['SLACK_CHANNEL'],
+        },
+        description="Slack notification channel for all gcp cost aggregator functions",
+        project=config_values['PROJECT'],
+    )
+
+    for function in functions:
+        # Create the function and it's corresponding pubsub and subscription.
+        fxn, trigger, alert_policy = create_cloud_function(
+            name=function,
+            config_values=config_values,
+            pubsub_topic=pubsub,
+            function_bucket=function_bucket,
+            source_archive_object=source_archive_object,
+            service_account=service_account,
+            slack_notification_channel=slack_notification_channel,
+        )
+
+        pulumi.export(f'{function}_fxn_name', fxn.name)
 
 
-# Set environment variable to the correct project
-os.environ['GCP_AGGREGATE_DEST_TABLE'] = config_values['GCP_AGGREGATE_DEST_TABLE']
-
-name = 'aggregate-billing'
-bucket_name = f'{config_values["PROJECT"]}-{name}'
-
-# Start by enabling all cloud function services
-gcp.projects.Service(
-    'cloudfunctions-service',
-    service='cloudfunctions.googleapis.com',
-    disable_on_destroy=False,
-)
-
-# We will store the source code to the Cloud Function in a Google Cloud Storage bucket.
-function_bucket = gcp.storage.Bucket(
-    bucket_name,
-    name=bucket_name,
-    location=config_values['REGION'],
-    project=config_values['PROJECT'],
-    uniform_bucket_level_access=True,
-)
-
-# The Cloud Function source code itself needs to be zipped up into an
-# archive, which we create using the pulumi.AssetArchive primitive.
-def archive_folder(path: str) -> pulumi.AssetArchive:
-    assets = {}
-    for file in os.listdir(path):
-        location = os.path.join(path, file)
-        if os.path.isdir(location) and not location.startswith('__'):
-            asset = pulumi.FileArchive(location)
-        elif location.endswith('.py') or location.endswith('.txt'):
-            asset = pulumi.FileAsset(path=location)
-
-        assets[file] = asset
-
-    return pulumi.AssetArchive(assets)
-
-
-archive = archive_folder(PATH_TO_SOURCE_CODE)
-
-# Create the single Cloud Storage object, which contains all of the function's
-# source code. ('main.py' and 'requirements.txt'.)
-source_archive_object = gcp.storage.BucketObject(
-    bucket_name,
-    name=f'{name}-source-archive-{time.time()}',
-    bucket=function_bucket.name,
-    source=archive,
-)
+def b64encode_str(s: str) -> str:
+    return b64encode(s.encode('utf-8')).decode('utf-8')
 
 
 def create_cloud_function(
-    name: str,
-    pubsub_topic: gcp.pubsub.Topic,
-    function_bucket: gcp.storage.Bucket,
-    source_archive_object: gcp.storage.BucketObject,
-    service_account: gcp.serviceaccount.Account,
-    slack_notification_channel: gcp.monitoring.NotificationChannel,
+    name: str = '',
+    config_values: dict = {},
+    pubsub_topic: gcp.pubsub.Topic = None,
+    function_bucket: gcp.storage.Bucket = None,
+    source_archive_object: gcp.storage.BucketObject = None,
+    service_account: gcp.serviceaccount.Account = None,
+    slack_notification_channel: gcp.monitoring.NotificationChannel = None,
 ):
     """
     Create a single Cloud Function. Include the pubsub trigger and event alerts
@@ -102,7 +154,7 @@ def create_cloud_function(
 
     # Trigger for the function, subscribe to the pubusub topic
     trigger = gcp.cloudfunctions.FunctionEventTriggerArgs(
-        event_type="google.pubsub.topic.publish", resource=pubsub_topic.name
+        event_type='google.pubsub.topic.publish', resource=pubsub_topic.name
     )
 
     # Create the Cloud Function
@@ -110,7 +162,7 @@ def create_cloud_function(
         'GCP_AGGREGATE_DEST_TABLE': config_values['GCP_AGGREGATE_DEST_TABLE'],
     }
     fxn = gcp.cloudfunctions.Function(
-        f"{name}-billing-function",
+        f'{name}-billing-function',
         entry_point=f'{name}',
         runtime='python39',
         event_trigger=trigger,
@@ -162,67 +214,19 @@ def create_cloud_function(
     return fxn, trigger, alert_policy
 
 
-# Create Service Account
-service_account = gcp.serviceaccount.Account(
-    f"Aggregate Billing default service account",
-    account_id=f"{name}",
-    project=config_values['PROJECT'],
-)
+def archive_folder(path: str) -> pulumi.AssetArchive:
+    assets = {}
+    for file in os.listdir(path):
+        location = os.path.join(path, file)
+        if os.path.isdir(location) and not location.startswith('__'):
+            asset = pulumi.FileArchive(location)
+        elif location.endswith('.py') or location.endswith('.txt'):
+            asset = pulumi.FileAsset(path=location)
 
-# Create the Cloud Function, deploying the source we just uploaded to Google
-# Cloud Storage.
-functions = ast.literal_eval(config_values['FUNCTIONS'])
+        assets[file] = asset
 
-# Deploy all functions
-pulumi.export('bucket_name', function_bucket.url)
-
-# Create one pubsub to be triggered by the cloud scheduler
-pubsub = gcp.pubsub.Topic(f"{name}-topic", project=config_values['PROJECT'])
-
-# Create slack notificaiton channel for all functions
-# Use cli command below to retrieve the required 'labels'
-# $ gcloud beta monitoring channel-descriptors describe slack
-slack_notification_channel = gcp.monitoring.NotificationChannel(
-    f"{name}-slack-notification-channel",
-    display_name=f"{name.capitalize()} Slack Notification Channel",
-    type="slack",
-    labels={
-        'auth_token': config_values['SLACK_AUTH_TOKEN'],
-        'channel_name': config_values['SLACK_CHANNEL'],
-    },
-    description="Slack notification channel for all gcp cost aggregator functions",
-    project=config_values['PROJECT'],
-)
-
-for function in functions:
-    # Create the function and it's corresponding pubsub and subscription.
-    fxn, trigger, alert_policy = create_cloud_function(
-        function,
-        pubsub,
-        function_bucket,
-        source_archive_object,
-        service_account,
-        slack_notification_channel,
-    )
-
-    pulumi.export(f'{function}_fxn_name', fxn.name)
+    return pulumi.AssetArchive(assets)
 
 
-def b64encode_str(s: str) -> str:
-    return b64encode(s.encode('utf-8')).decode('utf-8')
-
-
-# Create a cron job to run the function every day at midnight.
-job = gcp.cloudscheduler.Job(
-    f"{name}-job",
-    pubsub_target=gcp.cloudscheduler.JobPubsubTargetArgs(
-        topic_name=pubsub.id,
-        data=b64encode_str('Run the functions'),
-    ),
-    schedule='every 24 hours',
-    project=config_values['PROJECT'],
-    region=config_values['REGION'],
-    opts=pulumi.ResourceOptions(depends_on=[pubsub]),
-)
-
-pulumi.export('cron_job', job.id)
+if __name__ == '__main__':
+    main()

@@ -1,38 +1,43 @@
-# pyliny: disable=global-statement
+# pylint: disable=global-statement,too-many-arguments
 """
 Class of helper functions for billing aggregate functions
 """
+import asyncio
 import os
 import re
 import json
-from random import random
-import aiohttp
 import logging
-import pandas as pd
-import google.cloud.bigquery as bq
-import time
-
-from io import StringIO
 from pathlib import Path
+from io import StringIO
+from copy import deepcopy
 from collections import defaultdict
 from datetime import datetime, timedelta
+from typing import Dict, List, Any, Iterator, Optional, Sequence, Tuple, TypeVar, Union
+
+import aiohttp
+import pandas as pd
+import google.cloud.bigquery as bq
+
 from google.cloud import secretmanager
 from google.api_core.exceptions import ClientError
-from typing import Dict, List, Any, Iterator, Optional, Sequence, Tuple, TypeVar
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.DEBUG)
 
 # fix this later to be a proper configured logger
 logger = logging
 
-GCP_BILLING_BQ_TABLE = (
-    'billing-admin-290403.billing.gcp_billing_export_v1_01D012_20A6A2_CBD343'
-)
-GCP_AGGREGATE_DEST_TABLE = os.getenv('GCP_AGGREGATE_DEST_TABLE')
-logging.info('GCP_AGGREGATE_DEST_TABLE: {}'.format(GCP_AGGREGATE_DEST_TABLE))
-assert GCP_AGGREGATE_DEST_TABLE
+GCP_PROJECT = 'billing-admin-290403'
 
-SOURCE_GCP_PROJECT = os.getenv('SOURCE_GCP_PROJECT')
+GCP_BILLING_BQ_TABLE = (
+    f'{GCP_PROJECT}.billing.gcp_billing_export_v1_01D012_20A6A2_CBD343'
+)
+GCP_AGGREGATE_DEST_TABLE = os.getenv(
+    'GCP_AGGREGATE_DEST_TABLE', 'billing-admin-290403.billing_aggregate.aggregate'
+)
+
+assert GCP_AGGREGATE_DEST_TABLE
+logging.info('GCP_AGGREGATE_DEST_TABLE: {}'.format(GCP_AGGREGATE_DEST_TABLE))
+
 IS_PRODUCTION = os.getenv('PRODUCTION') in ('1', 'true', 'yes')
 
 # 10% overhead
@@ -46,25 +51,79 @@ HAIL_UI_URL = HAIL_BASE + '/batches/{batch_id}'
 HAIL_BATCHES_API = HAIL_BASE + '/api/v1alpha/batches'
 HAIL_JOBS_API = HAIL_BASE + '/api/v1alpha/batches/{batch_id}/jobs/resources'
 
+HAIL_PROJECT_FIELD = {
+    'id': 'hail-295901',
+    'number': '805950571114',
+    'name': 'hail-295901',
+    'labels': [],
+    'ancestry_numbers': '/648561325637/',
+    'ancestors': [
+        {
+            'resource_name': 'projects/805950571114',
+            'display_name': 'hail-295901',
+        },
+        {
+            'resource_name': 'organizations/648561325637',
+            'display_name': 'populationgenomics.org.au',
+        },
+    ],
+}
+
+SEQR_PROJECT_FIELD = {
+    'id': 'seqr-308602',
+    'number': '1021400127367',
+    'name': 'seqr-308602',
+    'labels': [],
+    'ancestry_numbers': '/648561325637/',
+    'ancestors': [
+        {
+            'resource_name': 'organizations/648561325637',
+            'display_name': 'populationgenomics.org.au',
+        }
+    ],
+}
+
 
 bigquery_client = bq.Client()
-# pyliny: disable=invalid-name
+# pylint: disable=invalid-name
 T = TypeVar('T')
 
 
-def retry_transient_errors_with_exponential_backoff(
-    method, errors, attempts=5, *args, **kwargs
+async def async_retry_transient_get_json_request(
+    url,
+    errors: Union[Exception, Tuple[Exception, ...]],
+    *args,
+    attempts=5,
+    session=None,
+    **kwargs,
 ):
     """
     Retry a function with exponential backoff.
     """
-    for attempt in range(1, attempts + 1):
-        try:
-            return method(*args, **kwargs)
-        except errors as e:
-            if attempt == attempts:
-                raise e
-            time.sleep(2 ** attempt)
+
+    async def inner_block(session):
+        for attempt in range(1, attempts + 1):
+            try:
+                async with session.get(url, *args, **kwargs) as resp:
+                    resp.raise_for_status()
+                    j = await resp.json()
+                    return j
+            # pylint: disable=broad-except
+            except Exception as e:
+                if not isinstance(e, errors):
+                    raise
+                if attempt == attempts:
+                    raise
+
+            t = 2 ** attempt
+            logger.warning(f'Backing off {t} seconds for {url}')
+            asyncio.sleep(t)
+
+    if session:
+        return await inner_block(session)
+
+    async with aiohttp.ClientSession() as session2:
+        return await inner_block(session2)
 
 
 def chunk(iterable: Sequence[T], chunk_size=50) -> Iterator[Sequence[T]]:
@@ -122,34 +181,95 @@ def get_hail_token():
     Get Hail token from local tokens file
     TODO: look at env var for deploy
     """
-    # assert SOURCE_GCP_PROJECT
-    # return read_secret(SOURCE_GCP_PROJECT, 'hail-token')
+    if os.getenv('DEV') in ('1', 'true', 'yes'):
+        with open(os.path.expanduser('~/.hail/tokens.json')) as f:
+            config = json.load(f)
+            return config['default']
 
-    with open(os.path.expanduser('~/.hail/tokens.json')) as f:
-        config = json.load(f)
-        return config['default']
+    assert GCP_PROJECT
+    return read_secret(GCP_PROJECT, 'aggregate-billing-hail-token')
 
 
-async def get_batches(billing_project: str, last_batch_id: any, token: str):
+def get_hail_credits(entries) -> List[Dict[str, Any]]:
+    """
+    Get a hail credit for each entry
+    """
+
+    hail_credits = [deepcopy(e) for e in entries]
+    for entry in hail_credits:
+
+        entry['topic'] = 'hail'
+        entry['id'] += '-credit'
+        entry['cost'] = -entry['cost']
+        entry['service'] = {
+            'id': 'aggregated-credit',
+            'description': 'Hail credit to correctly account for costs',
+        }
+        entry['sku']['id'] += '-credit'
+        entry['sku']['description'] += '-credit'
+        entry['project'] = HAIL_PROJECT_FIELD
+
+    return hail_credits
+
+
+def get_seqr_credits(entries) -> List[Dict[str, Any]]:
+    """
+    Get a hail credit for each entry
+    """
+
+    seqr_credits = [deepcopy(e) for e in entries]
+    for entry in seqr_credits:
+
+        entry['topic'] = 'seqr'
+        entry['id'] += '-credit'
+        entry['cost'] = -entry['cost']
+        entry['service'] = {
+            'id': 'aggregated-credit',
+            'description': 'Seqr credit to correctly account for costs',
+        }
+        entry['sku']['id'] += '-credit'
+        entry['sku']['description'] += '-credit'
+        entry['project'] = SEQR_PROJECT_FIELD
+
+    return seqr_credits
+
+
+async def get_batches(
+    token: str,
+    billing_project: Optional[str] = None,
+    last_batch_id: Optional[any] = None,
+):
     """
     Get list of batches for a billing project with no filtering.
     (Optional): from last_batch_id
     """
-    q = f'?q=billing_project:{billing_project}'
+
+    qparams = {}
+    if billing_project:
+        qparams['billing_project'] = billing_project
+
+    params = []
+    params.extend(f'q={k}:{v}' for k, v in qparams.items())
     if last_batch_id:
-        q += f'&last_batch_id={last_batch_id}'
+        params.append(f'last_batch_id={last_batch_id}')
 
-    async with aiohttp.ClientSession() as session:
-        async with session.get(
-            HAIL_BATCHES_API + q, headers={'Authorization': 'Bearer ' + token}
-        ) as resp:
-            resp.raise_for_status()
+    q = '?' + '&'.join(params)
+    url = HAIL_BATCHES_API + q
 
-            return await resp.json()
+    logging.debug(f'Getting batches: {url}')
+
+    return await async_retry_transient_get_json_request(
+        url,
+        aiohttp.ClientError,
+        headers={'Authorization': 'Bearer ' + token},
+    )
 
 
 async def get_finished_batches_for_date(
-    billing_project: str, start_day: datetime, end_day: datetime, token: str
+    start: datetime,
+    end: datetime,
+    token: str,
+    billing_project: Optional[str] = None,
 ):
     """
     Get all the batches that started on {date} and are complete.
@@ -161,10 +281,14 @@ async def get_finished_batches_for_date(
     n_requests = 0
     skipped = 0
 
+    logging.info(f'Getting batches for range: [{start}, {end}]')
+
     while True:
 
         n_requests += 1
-        jresponse = await get_batches(billing_project, last_batch_id, token)
+        jresponse = await get_batches(
+            billing_project=billing_project, last_batch_id=last_batch_id, token=token
+        )
 
         if 'last_batch_id' in jresponse and jresponse['last_batch_id'] == last_batch_id:
             raise ValueError(
@@ -179,9 +303,9 @@ async def get_finished_batches_for_date(
                 continue
 
             time_completed = parse_hail_time(b['time_completed'])
-            in_date_range = start_day <= time_completed < end_day
+            in_date_range = start <= time_completed < end
 
-            if time_completed < start_day:
+            if time_completed < start:
                 logging.info(
                     f'{billing_project} :: Got {len(batches)} batches '
                     f'in {n_requests} requests, skipping {skipped}'
@@ -201,7 +325,8 @@ async def get_jobs_for_batch(batch_id, token: str) -> List[str]:
     last_job_id = None
     end = False
     iterations = 0
-    async with aiohttp.ClientSession() as client:
+
+    async with aiohttp.ClientSession() as session:
         while not end:
             iterations += 1
 
@@ -212,19 +337,20 @@ async def get_jobs_for_batch(batch_id, token: str) -> List[str]:
             if last_job_id:
                 q += f'&last_job_id={last_job_id}'
             url = HAIL_JOBS_API.format(batch_id=batch_id) + q
-            async with client.get(
-                url, headers={'Authorization': 'Bearer ' + token}
-            ) as response:
-                response.raise_for_status()
 
-                jresponse = await response.json()
-                new_last_job_id = jresponse.get('last_job_id')
-                if new_last_job_id is None:
-                    end = True
-                elif last_job_id and new_last_job_id <= last_job_id:
-                    raise ValueError('Something fishy with last job id')
-                last_job_id = new_last_job_id
-                jobs.extend(jresponse['jobs'])
+            jresponse = await async_retry_transient_get_json_request(
+                url,
+                aiohttp.ClientError,
+                session=session,
+                headers={'Authorization': 'Bearer ' + token},
+            )
+            new_last_job_id = jresponse.get('last_job_id')
+            if new_last_job_id is None:
+                end = True
+            elif last_job_id and new_last_job_id <= last_job_id:
+                raise ValueError('Something fishy with last job id')
+            last_job_id = new_last_job_id
+            jobs.extend(jresponse['jobs'])
 
     return jobs
 
@@ -260,7 +386,7 @@ def insert_new_rows_in_table(table: str, obj: List[Dict[str, Any]]) -> int:
         counter = defaultdict(int)
         for o in obj:
             counter[o['id']] += 1
-        duplicates = [k for k, v in counter.items() if v > 1]
+        duplicates = [f'{k} ({v})' for k, v in counter.items() if v > 1]
         raise ValueError(
             'There are multiple rows with the same id: ' + ', '.join(duplicates)
         )
@@ -280,7 +406,7 @@ def insert_new_rows_in_table(table: str, obj: List[Dict[str, Any]]) -> int:
     nrows = len(filtered_obj)
 
     if nrows == 0:
-        logging.info('Not inserting any rows')
+        logging.info(f'Not inserting any rows (0/{len(obj)})')
         return 0
 
     # Count number of rows adding
@@ -557,6 +683,9 @@ def get_entry(
     end_time: datetime,
     labels: Dict[str, str] = None,
 ) -> Dict[str, Any]:
+    """
+    Get well formed entry dictionary from keys
+    """
 
     assert labels is None or isinstance(labels, dict)
 
