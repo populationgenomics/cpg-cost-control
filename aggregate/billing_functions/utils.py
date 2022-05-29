@@ -21,19 +21,20 @@ import google.cloud.bigquery as bq
 from google.cloud import secretmanager
 from google.api_core.exceptions import ClientError
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.DEBUG)
 
 # fix this later to be a proper configured logger
 logger = logging
 
+GCP_PROJECT = 'billing-admin-290403'
+
 GCP_BILLING_BQ_TABLE = (
-    'billing-admin-290403.billing.gcp_billing_export_v1_01D012_20A6A2_CBD343'
+    f'{GCP_PROJECT}.billing.gcp_billing_export_v1_01D012_20A6A2_CBD343'
 )
 GCP_AGGREGATE_DEST_TABLE = os.getenv('GCP_AGGREGATE_DEST_TABLE')
 logging.info('GCP_AGGREGATE_DEST_TABLE: {}'.format(GCP_AGGREGATE_DEST_TABLE))
 assert GCP_AGGREGATE_DEST_TABLE
 
-SOURCE_GCP_PROJECT = os.getenv('SOURCE_GCP_PROJECT')
 IS_PRODUCTION = os.getenv('PRODUCTION') in ('1', 'true', 'yes')
 
 # 10% overhead
@@ -181,8 +182,8 @@ def get_hail_token():
             config = json.load(f)
             return config['default']
 
-    assert SOURCE_GCP_PROJECT
-    return read_secret(SOURCE_GCP_PROJECT, 'hail-token')
+    assert GCP_PROJECT
+    return read_secret(GCP_PROJECT, 'aggregate-billing-hail-token')
 
 
 def get_hail_credits(entries) -> List[Dict[str, Any]]:
@@ -229,24 +230,42 @@ def get_seqr_credits(entries) -> List[Dict[str, Any]]:
     return seqr_credits
 
 
-async def get_batches(billing_project: str, last_batch_id: any, token: str):
+async def get_batches(
+    token: str,
+    billing_project: Optional[str] = None,
+    last_batch_id: Optional[any] = None,
+):
     """
     Get list of batches for a billing project with no filtering.
     (Optional): from last_batch_id
     """
-    q = f'?q=billing_project:{billing_project}'
+
+    qparams = {}
+    if billing_project:
+        qparams['billing_project'] = billing_project
+
+    params = []
+    params.extend(f'q={k}:{v}' for k, v in qparams.items())
     if last_batch_id:
-        q += f'&last_batch_id={last_batch_id}'
+        params.append(f'last_batch_id={last_batch_id}')
+
+    q = '?' + '&'.join(params)
+    url = HAIL_BATCHES_API + q
+
+    logging.debug(f'Getting batches: {url}')
 
     return await async_retry_transient_get_json_request(
-        HAIL_BATCHES_API + q,
+        url,
         aiohttp.ClientError,
         headers={'Authorization': 'Bearer ' + token},
     )
 
 
 async def get_finished_batches_for_date(
-    billing_project: str, start_day: datetime, end_day: datetime, token: str
+    start: datetime,
+    end: datetime,
+    token: str,
+    billing_project: Optional[str] = None,
 ):
     """
     Get all the batches that started on {date} and are complete.
@@ -258,10 +277,14 @@ async def get_finished_batches_for_date(
     n_requests = 0
     skipped = 0
 
+    logging.info(f'Getting batches for range: [{start}, {end}]')
+
     while True:
 
         n_requests += 1
-        jresponse = await get_batches(billing_project, last_batch_id, token)
+        jresponse = await get_batches(
+            billing_project=billing_project, last_batch_id=last_batch_id, token=token
+        )
 
         if 'last_batch_id' in jresponse and jresponse['last_batch_id'] == last_batch_id:
             raise ValueError(
@@ -276,9 +299,9 @@ async def get_finished_batches_for_date(
                 continue
 
             time_completed = parse_hail_time(b['time_completed'])
-            in_date_range = start_day <= time_completed < end_day
+            in_date_range = start <= time_completed < end
 
-            if time_completed < start_day:
+            if time_completed < start:
                 logging.info(
                     f'{billing_project} :: Got {len(batches)} batches '
                     f'in {n_requests} requests, skipping {skipped}'
@@ -298,6 +321,7 @@ async def get_jobs_for_batch(batch_id, token: str) -> List[str]:
     last_job_id = None
     end = False
     iterations = 0
+
     async with aiohttp.ClientSession() as session:
         while not end:
             iterations += 1
@@ -378,7 +402,7 @@ def insert_new_rows_in_table(table: str, obj: List[Dict[str, Any]]) -> int:
     nrows = len(filtered_obj)
 
     if nrows == 0:
-        logging.info('Not inserting any rows')
+        logging.info(f'Not inserting any rows (0/{len(obj)})')
         return 0
 
     # Count number of rows adding

@@ -145,7 +145,7 @@ async def migrate_entries_from_hail_batch(
     result = 0
 
     batches = await get_finished_batches_for_date(
-        SEQR_HAIL_BILLING_PROJECT, start, end, token
+        start=start, end=end, token=token, billing_project=SEQR_HAIL_BILLING_PROJECT
     )
     if len(batches) == 0:
         return 0
@@ -167,7 +167,7 @@ async def migrate_entries_from_hail_batch(
             if len(batches) > 100:
                 logger.info(
                     f'seqr :: Getting jobs for batch chunk {chnk_counter}/{nchnks} '
-                    f'[{min_batch}, {max_batch}]'
+                    f'[{min_batch["time_created"]}, {max_batch["time_created"]}]'
                 )
 
             promises = [get_jobs_for_batch(b['id'], token) for b in batch_group_group]
@@ -199,13 +199,13 @@ def get_finalised_entries_for_batch(
     end_time = parse_hail_time(batch['time_completed'])
     prop_map = get_ratios_from_date(start_time, proportion_map)
 
-    jobs_with_no_dataset: List[Dict[str, Any]] = []
+    jobs_with_no_dataset: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
     entries: List[Dict[str, Any]] = []
 
     for job in batch['jobs']:
-        dataset = job['attributes'].get('dataset').replace("-test", "")
+        dataset = job['attributes'].get('dataset', '').replace("-test", "")
         if not dataset:
-            jobs_with_no_dataset.append(job)
+            jobs_with_no_dataset.append((batch, job))
             continue
 
         sample = job['attributes'].get('sample')
@@ -257,54 +257,64 @@ def get_finalised_entries_for_batch(
             )
 
     extra_job_resources = defaultdict(int)
-    for job in jobs_with_no_dataset:
+    for batch, job in jobs_with_no_dataset:
+
+        start_time = parse_hail_time(batch['time_created'])
+        currency_conversion_rate = get_currency_conversion_rate_for_time(start_time)
+
         for batch_resource, usage in job['resources'].items():
             if batch_resource.startswith('service-fee'):
                 continue
 
             extra_job_resources[batch_resource] += usage
 
-    for batch_resource, usage in extra_job_resources.items():
+        for batch_resource, usage in extra_job_resources.items():
 
-        batch_id = batch['id']
-        hail_ui_url = HAIL_UI_URL.replace('{batch_id}', str(batch_id))
+            batch_id = batch['id']
+            hail_ui_url = HAIL_UI_URL.replace('{batch_id}', str(batch_id))
 
-        labels = {
-            'batch_name': batch_name,
-            'batch_id': str(batch_id),
-        }
-        labels['batch_resource'] = batch_resource
-        labels['url'] = hail_ui_url
+            labels = {
+                'batch_name': batch_name,
+                'batch_id': str(batch_id),
+            }
+            labels['batch_resource'] = batch_resource
+            labels['url'] = hail_ui_url
 
-        gross_cost = currency_conversion_rate * get_usd_cost_for_resource(
-            batch_resource, usage
-        )
-
-        for dataset, fraction in prop_map.items():
-            # Distribute the remaining cost across all datasets proportionately
-            cost = gross_cost * fraction
-
-            entries.append(
-                get_entry(
-                    key='-'.join(
-                        [SERVICE_ID, 'distributed', dataset, batch_resource, batch_id]
-                    ),
-                    topic=dataset,
-                    service_id=SERVICE_ID,
-                    description='Seqr compute (distributed)',
-                    cost=cost,
-                    currency_conversion_rate=currency_conversion_rate,
-                    usage=round(usage * fraction),
-                    batch_resource=batch_resource,
-                    start_time=start_time,
-                    end_time=end_time,
-                    labels={
-                        **labels,
-                        'dataset': dataset,
-                        'fraction': round(100 * fraction) / 100,
-                    },
-                )
+            gross_cost = currency_conversion_rate * get_usd_cost_for_resource(
+                batch_resource, usage
             )
+
+            for dataset, fraction in prop_map.items():
+                # Distribute the remaining cost across all datasets proportionately
+                cost = gross_cost * fraction
+
+                entries.append(
+                    get_entry(
+                        key='-'.join(
+                            [
+                                SERVICE_ID,
+                                'distributed',
+                                dataset,
+                                batch_resource,
+                                batch_id,
+                            ]
+                        ),
+                        topic=dataset,
+                        service_id=SERVICE_ID,
+                        description='Seqr compute (distributed)',
+                        cost=cost,
+                        currency_conversion_rate=currency_conversion_rate,
+                        usage=round(usage * fraction),
+                        batch_resource=batch_resource,
+                        start_time=start_time,
+                        end_time=end_time,
+                        labels={
+                            **labels,
+                            'dataset': dataset,
+                            'fraction': round(100 * fraction) / 100,
+                        },
+                    )
+                )
 
     entries.extend(get_hail_credits(entries))
 
@@ -519,8 +529,9 @@ async def main(start: datetime = None, end: datetime = None, dry_run=False):
     projects = get_seqr_datasets()
 
     prop_map = await generate_proportionate_map_of_dataset(start, end, projects)
+    result = 0
 
-    result = migrate_entries_from_bq(start, end, prop_map, dry_run=dry_run)
+    result += migrate_entries_from_bq(start, end, prop_map, dry_run=dry_run)
     result += await migrate_entries_from_hail_batch(
         start, end, prop_map, dry_run=dry_run
     )

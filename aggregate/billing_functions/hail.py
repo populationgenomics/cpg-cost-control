@@ -49,6 +49,8 @@ except ImportError:
 SERVICE_ID = 'hail'
 logging.basicConfig(level=logging.INFO)
 
+EXCLUDED_BATCH_IDS = {'seqr'}
+
 
 def get_billing_projects():
     """
@@ -61,7 +63,7 @@ def get_billing_projects():
     return ds
 
 
-def get_finalised_entries_for_batch(dataset, batch: dict) -> List[Dict]:
+def get_finalised_entries_for_batch(batch: dict) -> List[Dict]:
     """
     Take a batch, and generate the actual cost of all the jobs,
     and return a list of BigQuery rows - one per resource type.
@@ -72,6 +74,8 @@ def get_finalised_entries_for_batch(dataset, batch: dict) -> List[Dict]:
     end_time = parse_hail_time(batch['time_completed'])
     batch_id = batch['id']
     resource_usage = defaultdict(float)
+    dataset = batch['billing_project']
+
     currency_conversion_rate = get_currency_conversion_rate_for_time(start_time)
     for job in batch['jobs']:
         if not job['resources']:
@@ -123,17 +127,21 @@ def get_finalised_entries_for_batch(dataset, batch: dict) -> List[Dict]:
     return entries
 
 
-async def process_and_finalise_entries_for(bp, start, end, token) -> int:
+async def process_and_finalise_entries_for(start, end, token) -> int:
     """
     For a given billing project, get all the batches completed in (start, end]
     and convert these batches into entries (1 per batch) for the aggregation table.
     """
-    logger.info(f'{bp} :: loading batches')
-    batches = await get_finished_batches_for_date(bp, start, end, token)
+    batches = await get_finished_batches_for_date(start=start, end=end, token=token)
     if len(batches) == 0:
         return 0
-    # batches = [b for b in batches if '...' not in b['attributes']['name']]
-    logger.info(f'{bp} :: Filling in information for {len(batches)} batches')
+    logger.info(f'Filling in information for {len(batches)} batches')
+
+    batches = [b for b in batches if b['billing_project'] not in EXCLUDED_BATCH_IDS]
+    counter = defaultdict(int)
+    for o in batches:
+        counter[o['billing_project']] += 1
+    logger.info(f'Billing project breakdown: {json.dumps(counter)}')
 
     # we'll process 500 batches, and insert all entries for that
     chnk_counter = 0
@@ -152,7 +160,7 @@ async def process_and_finalise_entries_for(bp, start, end, token) -> int:
 
             if len(batches) > 100:
                 logger.info(
-                    f'{bp} :: Getting jobs for batch chunk {chnk_counter}/{nchnks} [{min_batch}, {max_batch}]'
+                    f' Getting jobs for batch chunk {chnk_counter}/{nchnks} [{min_batch}, {max_batch}]'
                 )
 
             promises = [get_jobs_for_batch(b['id'], token) for b in batch_group_group]
@@ -160,14 +168,14 @@ async def process_and_finalise_entries_for(bp, start, end, token) -> int:
 
         for batch, jobs in zip(btch_grp, jobs_in_batch):
             batch['jobs'] = jobs
-            entries.extend(get_finalised_entries_for_batch(bp, batch))
+            entries.extend(get_finalised_entries_for_batch(batch))
 
         # Give hail batch a break :sweat:
         await asyncio.sleep(1)
 
         # Insert new rows into aggregation table
         entries.extend(get_hail_credits(entries))
-        logger.info(f'{bp} :: Inserting {len(entries)} entries')
+        logger.info(f'Inserting {len(entries)} entries')
         result += insert_new_rows_in_table(table=GCP_AGGREGATE_DEST_TABLE, obj=entries)
 
     return result
@@ -190,12 +198,8 @@ def from_pubsub(data=None, context=None):
 
 
 async def migrate_hail_data(start, end, token):
-    promises = [
-        process_and_finalise_entries_for(bp, start, end, token)
-        for bp in get_billing_projects()
-    ]
-    result_promises = await asyncio.gather(*promises)
-    result = sum(result_promises)
+
+    result = await process_and_finalise_entries_for(start=start, end=end, token=token)
 
     return result
 
