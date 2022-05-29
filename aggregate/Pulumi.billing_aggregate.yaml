@@ -7,3 +7,5 @@ config:
     - seqr
   opts:destination: billing-admin-290403.billing_aggregate.aggregate
   # opts:destination: sabrina-dev-337923.billing.aggregate
+  opts:slack_channel: '#software-alerts'
+  # opts:slack_auth_token: <set env variable SLACK_AUTH_TOKEN>

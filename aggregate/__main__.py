@@ -33,7 +33,10 @@ config_values = {
     'REGION': gcp_opts.get('region'),
     'GCP_AGGREGATE_DEST_TABLE': opts.get('destination'),
     'FUNCTIONS': opts.get('functions'),
+    'SLACK_AUTH_TOKEN': os.environ.get('SLACK_AUTH_TOKEN'),
+    'SLACK_CHANNEL': opts.get('slack_channel'),
 }
+
 
 # Set environment variable to the correct project
 os.environ['GCP_AGGREGATE_DEST_TABLE'] = config_values['GCP_AGGREGATE_DEST_TABLE']
@@ -91,11 +94,18 @@ def create_cloud_function(
     function_bucket: gcp.storage.Bucket,
     source_archive_object: gcp.storage.BucketObject,
     service_account: gcp.serviceaccount.Account,
+    slack_notification_channel: gcp.monitoring.NotificationChannel,
 ):
+    """
+    Create a single Cloud Function. Include the pubsub trigger and event alerts
+    """
+
+    # Trigger for the function, subscribe to the pubusub topic
     trigger = gcp.cloudfunctions.FunctionEventTriggerArgs(
         event_type="google.pubsub.topic.publish", resource=pubsub_topic.name
     )
 
+    # Create the Cloud Function
     env = {
         'GCP_AGGREGATE_DEST_TABLE': config_values['GCP_AGGREGATE_DEST_TABLE'],
     }
@@ -123,7 +133,33 @@ def create_cloud_function(
         ),
     )
 
-    return fxn, trigger
+    filter_string = fxn.name.apply(
+        lambda fxn_name: f'resource.type="cloud_function" AND resource.labels.function_name="{fxn_name}" AND severity >= WARNING'
+    )
+
+    # Create the Cloud Function's event alert
+    alert_policy = gcp.monitoring.AlertPolicy(
+        f"{name}-billing-function-error-alert",
+        display_name=f"{name.capitalize()} Billing Function Error Alert",
+        combiner="OR",
+        notification_channels=[slack_notification_channel],
+        conditions=[
+            gcp.monitoring.AlertPolicyConditionArgs(
+                condition_matched_log=gcp.monitoring.AlertPolicyConditionConditionMatchedLogArgs(
+                    filter=filter_string,
+                ),
+                display_name='Function warning/error',
+            )
+        ],
+        alert_strategy=gcp.monitoring.AlertPolicyAlertStrategyArgs(
+            notification_rate_limit=gcp.monitoring.AlertPolicyAlertStrategyNotificationRateLimitArgs(
+                period="300s"
+            ),
+        ),
+        opts=pulumi.ResourceOptions(depends_on=[fxn]),
+    )
+
+    return fxn, trigger, alert_policy
 
 
 # Create Service Account
@@ -143,10 +179,30 @@ pulumi.export('bucket_name', function_bucket.url)
 # Create one pubsub to be triggered by the cloud scheduler
 pubsub = gcp.pubsub.Topic(f"{name}-topic", project=config_values['PROJECT'])
 
+# Create slack notificaiton channel for all functions
+# Use cli command below to retrieve the required 'labels'
+# $ gcloud beta monitoring channel-descriptors describe slack
+slack_notification_channel = gcp.monitoring.NotificationChannel(
+    f"{name}-slack-notification-channel",
+    display_name=f"{name.capitalize()} Slack Notification Channel",
+    type="slack",
+    labels={
+        'auth_token': config_values['SLACK_AUTH_TOKEN'],
+        'channel_name': config_values['SLACK_CHANNEL'],
+    },
+    description="Slack notification channel for all gcp cost aggregator functions",
+    project=config_values['PROJECT'],
+)
+
 for function in functions:
     # Create the function and it's corresponding pubsub and subscription.
-    fxn, trigger = create_cloud_function(
-        function, pubsub, function_bucket, source_archive_object, service_account
+    fxn, trigger, alert_policy = create_cloud_function(
+        function,
+        pubsub,
+        function_bucket,
+        source_archive_object,
+        service_account,
+        slack_notification_channel,
     )
 
     pulumi.export(f'{function}_fxn_name', fxn.name)
