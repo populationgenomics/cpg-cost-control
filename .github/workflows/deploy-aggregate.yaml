@@ -50,6 +50,9 @@ on: push
   # push:
   #   branches:
   #     - main
+
+env:
+  GOOGLE_CREDENTIALS: '{{ secrets.GCP_CREDENTIALS }}'
       
 jobs:
   deploy:
@@ -78,8 +81,8 @@ jobs:
         run: pip install -r requirements.txt
       
       - name: Pulumi
-        run: pulumi up -s billing_aggregate -y
-      # - uses: pulumi/actions@v3
-      #   with:
-      #     command: up
-      #     stack-name: billing_aggregate
+        uses: pulumi/actions@v3
+        with:
+          command: up
+          stack-name: billing_aggregate
+
