@@ -197,7 +197,7 @@ def from_request(request):
     From request object, get start and end time if present
     """
     start, end = utils.get_start_and_end_from_request(request)
-    asyncio.get_event_loop().run_until_complete(main(start, end))
+    asyncio.new_event_loop().run_until_complete(main(start, end))
 
 
 def from_pubsub(data=None, _=None):
@@ -205,7 +205,7 @@ def from_pubsub(data=None, _=None):
     From pubsub message, get start and end time if present
     """
     start, end = utils.get_start_and_end_from_data(data)
-    asyncio.get_event_loop().run_until_complete(main(start, end))
+    asyncio.new_event_loop().run_until_complete(main(start, end))
 
 
 async def main(start: datetime = None, end: datetime = None) -> int:
@@ -227,4 +227,4 @@ if __name__ == '__main__':
     test_start, test_end = None, None
     # test_start, test_end = datetime(2022, 4, 1), datetime(2022, 5, 3)
 
-    asyncio.get_event_loop().run_until_complete(main(start=test_start, end=test_end))
+    asyncio.new_event_loop().run_until_complete(main(start=test_start, end=test_end))
