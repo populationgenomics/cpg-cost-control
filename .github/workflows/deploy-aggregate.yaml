@@ -82,7 +82,7 @@ jobs:
         uses: pulumi/actions@v3
         with:
           command: up
-          upsert: true
+          upsert: false
           work-dir: aggregate
           stack-name: billing_aggregate
-          
+
