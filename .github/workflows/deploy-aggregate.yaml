@@ -85,6 +85,7 @@ jobs:
         with:
           command: up
           stack-name: billing_aggregate
+          work-dir: aggregate
         
           
 
