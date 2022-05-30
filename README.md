@@ -1,6 +1,6 @@
-[![Billing Aggregation Deploy](https://github.com/populationgenomics/gcp-cost-control/actions/workflows/deploy-aggregate.yaml/badge.svg)](https://github.com/populationgenomics/gcp-cost-control/actions/workflows/deploy-aggregate.yaml)
-
 # GCP cost control
+
+[![Billing Aggregation Deploy](https://github.com/populationgenomics/gcp-cost-control/actions/workflows/deploy-aggregate.yaml/badge.svg)](https://github.com/populationgenomics/gcp-cost-control/actions/workflows/deploy-aggregate.yaml)
 
 This repository contains a Cloud Function that handles GCP billing budget
 notifications, inspired by the

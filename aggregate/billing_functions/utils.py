@@ -36,7 +36,7 @@ GCP_AGGREGATE_DEST_TABLE = os.getenv(
 )
 
 assert GCP_AGGREGATE_DEST_TABLE
-logging.info('GCP_AGGREGATE_DEST_TABLE: {}'.format(GCP_AGGREGATE_DEST_TABLE))
+logging.info(f'GCP_AGGREGATE_DEST_TABLE: {GCP_AGGREGATE_DEST_TABLE}')
 
 IS_PRODUCTION = os.getenv('PRODUCTION') in ('1', 'true', 'yes')
 
@@ -115,7 +115,7 @@ async def async_retry_transient_get_json_request(
                 if attempt == attempts:
                     raise
 
-            t = 2 ** attempt
+            t = 2**attempt
             logger.warning(f'Backing off {t} seconds for {url}')
             asyncio.sleep(t)
 
@@ -138,7 +138,7 @@ def get_bq_schema_json():
     """Get the schema for the table"""
     pwd = Path(__file__).parent.parent.resolve()
     schema_path = pwd / 'schema' / 'aggregate_schema.json'
-    with open(schema_path, 'r') as f:
+    with open(schema_path, 'r', encoding='utf-8') as f:
         return json.load(f)
 
 
@@ -182,7 +182,7 @@ def get_hail_token():
     TODO: look at env var for deploy
     """
     if os.getenv('DEV') in ('1', 'true', 'yes'):
-        with open(os.path.expanduser('~/.hail/tokens.json')) as f:
+        with open(os.path.expanduser('~/.hail/tokens.json'), encoding='utf-8') as f:
             config = json.load(f)
             return config['default']
 
@@ -478,7 +478,6 @@ def get_currency_conversion_rate_for_time(time: datetime):
     and apply to each job that starts within the month, regardless of when
     the job finishes.
     """
-    global CACHED_CURRENCY_CONVERSION
 
     key = f'{time.year}-{time.month}'
     if key not in CACHED_CURRENCY_CONVERSION:
@@ -500,7 +499,7 @@ def _generate_hail_resource_cost_lookup():
     Generate the cost table for the hail resources.
     This is currently set to the australia-southeast-1 region.
     """
-    # pylint: disable=import-outside-toplevel
+    # pylint: disable=import-outside-toplevel,import-error
     from hailtop.utils import (
         rate_gib_hour_to_mib_msec,
         rate_gib_month_to_mib_msec,
@@ -613,7 +612,7 @@ def get_start_and_end_from_data(data) -> Tuple[Optional[datetime], Optional[date
     Get the start and end times from the cloud function data.
     """
     if data:
-        dates = dict()
+        dates = {}
         if data.get('attributes'):
             dates = data.get('attributes', {})
         elif data.get('start') and data.get('end'):
