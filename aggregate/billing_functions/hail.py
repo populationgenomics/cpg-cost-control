@@ -131,7 +131,7 @@ def get_finalised_entries_for_batch(batch: dict) -> List[Dict]:
     return entries
 
 
-async def migrate_hail_data(start, end, token) -> int:
+async def migrate_hail_data(start, end, token, dry_run=False) -> int:
     """
     For a given billing project, get all the batches completed in (start, end]
     and convert these batches into entries (1 per batch) for the aggregation table.
@@ -140,6 +140,7 @@ async def migrate_hail_data(start, end, token) -> int:
         start=start, end=end, token=token
     )
     if len(batches) == 0:
+        logger.info('Got no batches')
         return 0
     logger.info(f'Filling in information for {len(batches)} batches')
 
@@ -184,10 +185,14 @@ async def migrate_hail_data(start, end, token) -> int:
 
         # Insert new rows into aggregation table
         entries.extend(utils.get_hail_credits(entries))
-        logger.info(f'Inserting {len(entries)} entries')
-        result += utils.insert_new_rows_in_table(
-            table=utils.GCP_AGGREGATE_DEST_TABLE, obj=entries
-        )
+        if dry_run:
+            logger.info(f'Skipping insert of {len(entries)} entries (dry_run=True)')
+            result += len(entries)
+        else:
+            logger.info(f'Inserting {len(entries)} entries')
+            result += utils.insert_new_rows_in_table(
+                table=utils.GCP_AGGREGATE_DEST_TABLE, obj=entries
+            )
 
     return result
 
@@ -208,7 +213,9 @@ def from_pubsub(data=None, _=None):
     asyncio.new_event_loop().run_until_complete(main(start, end))
 
 
-async def main(start: datetime = None, end: datetime = None) -> int:
+async def main(
+    start: datetime = None, end: datetime = None, dry_run: bool = False
+) -> int:
     """Main body function"""
 
     start, end = utils.process_default_start_and_end(start, end)
@@ -216,7 +223,7 @@ async def main(start: datetime = None, end: datetime = None) -> int:
     hail_token = utils.get_hail_token()
 
     # Migrate the data in batches
-    result = await migrate_hail_data(start, end, hail_token)
+    result = await migrate_hail_data(start, end, hail_token, dry_run=dry_run)
 
     logging.info(f'Migrated a total of {result} rows')
 
