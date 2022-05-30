@@ -78,7 +78,7 @@ jobs:
         working-directory: aggregate
       
       - name: Pulumi
-        run: pwd && pulumi up -s billing_aggregate -y
+        run: ls && pulumi up -s billing_aggregate -y
         working-directory: aggregate
         
         # uses: pulumi/actions@v3
