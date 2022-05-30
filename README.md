@@ -1,4 +1,3 @@
-[![Billing Aggregation Linter](https://github.com/populationgenomics/gcp-cost-control/actions/workflows/lint.yaml/badge.svg)](https://github.com/populationgenomics/gcp-cost-control/actions/workflows/lint.yaml)
 [![Billing Aggregation Deploy](https://github.com/populationgenomics/gcp-cost-control/actions/workflows/deploy-aggregate.yaml/badge.svg)](https://github.com/populationgenomics/gcp-cost-control/actions/workflows/deploy-aggregate.yaml)
 
 # GCP cost control
