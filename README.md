@@ -1,5 +1,5 @@
-![Billing Aggregation Linter](https://github.com/github/docs/actions/workflows/link.yml/badge.svg)
-![Billing Aggregation Deploy](https://github.com/github/docs/actions/workflows/deploy-aggregate.yml/badge.svg)
+![Billing Aggregation Linter](https://github.com/populationgenomics/gcp-cost-control/actions/workflows/link.yml/badge.svg)
+![Billing Aggregation Deploy](https://github.com/populationgenomics/gcp-cost-control/actions/workflows/deploy-aggregate.yml/badge.svg)
 
 # GCP cost control
 
