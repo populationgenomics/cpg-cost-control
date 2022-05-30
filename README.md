@@ -1,3 +1,6 @@
+![Billing Aggregation Linter](https://github.com/github/docs/actions/workflows/link.yml/badge.svg)
+![Billing Aggregation Deploy](https://github.com/github/docs/actions/workflows/deploy-aggregate.yml/badge.svg)
+
 # GCP cost control
 
 This repository contains a Cloud Function that handles GCP billing budget
