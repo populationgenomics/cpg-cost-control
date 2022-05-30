@@ -1,5 +1,5 @@
 black>=22.3.0
 pre-commit
 pylint
-pulumi==3.31.0
+pulumi==3.33.2
 pulumi-gcp==6.21.0

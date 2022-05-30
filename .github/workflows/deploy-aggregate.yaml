@@ -69,7 +69,7 @@ jobs:
           credentials_json: '${{ secrets.GCP_CREDENTIALS }}'
 
       - name: Python
-        uses: actions/setup-python@v2
+        uses: actions/setup-python@v3
         with:
           python-version: 3.10.4
           
@@ -78,7 +78,7 @@ jobs:
         working-directory: aggregate
       
       - name: Pulumi
-        run: pulumi up -s billing_aggregate -y
+        run: pwd && pulumi up -s billing_aggregate -y
         working-directory: aggregate
         
         # uses: pulumi/actions@v3
