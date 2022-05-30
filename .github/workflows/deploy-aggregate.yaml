@@ -77,7 +77,9 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
       
-      - uses: pulumi/actions@v3
-        with:
-          command: up
-          stack-name: billing_aggregate
+      - name: Pulumi
+        run: pulumi up -s billing_aggregate
+      # - uses: pulumi/actions@v3
+      #   with:
+      #     command: up
+      #     stack-name: billing_aggregate
