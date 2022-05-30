@@ -88,4 +88,3 @@ jobs:
           refresh: true
           work-dir: aggregate
           stack-name: billing_aggregate
-
