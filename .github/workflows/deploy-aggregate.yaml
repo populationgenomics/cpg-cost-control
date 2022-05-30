@@ -85,6 +85,7 @@ jobs:
         with:
           command: up
           upsert: false
+          refresh: true
           work-dir: aggregate
           stack-name: billing_aggregate
 
