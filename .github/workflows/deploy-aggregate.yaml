@@ -60,7 +60,6 @@ jobs:
     
     defaults:
       run:
-        working-directory: aggregate
     
     steps:
       - name: Checkout
@@ -79,6 +78,7 @@ jobs:
           
       - name: Install dependencies
         run: pip install -r requirements.txt
+        working-directory: aggregate
       
       - name: Pulumi
         uses: pulumi/actions@v3
