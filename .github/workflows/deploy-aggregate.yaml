@@ -79,8 +79,8 @@ jobs:
       
       - name: Pulumi
         run: pulumi up -s billing_aggregate -y
-        with:
-          working-directory: aggregate
+        working-directory: aggregate
+        
         # uses: pulumi/actions@v3
         # with:
         #   command: up
