@@ -85,3 +85,4 @@ jobs:
           upsert: true
           work-dir: aggregate
           stack-name: billing_aggregate
+          
