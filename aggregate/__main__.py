@@ -35,13 +35,14 @@ def main():
         'PROJECT': gcp_opts.get('project'),
         'FUNCTIONS': opts.get('functions'),
         'SLACK_CHANNEL': opts.get('slack_channel'),
+        'GCP_SERVICE_ACCOUNT': opts.get('service_account'),
         'GCP_AGGREGATE_DEST_TABLE': opts.get('destination'),
         'SLACK_AUTH_TOKEN': os.getenv('SLACK_AUTH_TOKEN'),
     }
 
     # Set environment variable to the correct project
     name = 'aggregate-billing'
-    bucket_name = f'{config_values["PROJECT"]}-{name}'
+    bucket_name = f'{name}-{config_values["PROJECT"]}'
 
     # Start by enabling all cloud function services
     gcp.projects.Service(
@@ -77,11 +78,7 @@ def main():
     )
 
     # Create Service Account
-    service_account = gcp.serviceaccount.Account(
-        f'Aggregate Billing default service account',
-        account_id=f'{name}',
-        project=config_values['PROJECT'],
-    )
+    service_account = config_values['GCP_SERVICE_ACCOUNT']
 
     # Create the Cloud Function, deploying the source we just uploaded to Google
     # Cloud Storage.
@@ -142,10 +139,10 @@ def b64encode_str(s: str) -> str:
 def create_cloud_function(
     name: str = '',
     config_values: dict = {},
+    service_account: str = None,
     pubsub_topic: gcp.pubsub.Topic = None,
     function_bucket: gcp.storage.Bucket = None,
     source_archive_object: gcp.storage.BucketObject = None,
-    service_account: gcp.serviceaccount.Account = None,
     slack_notification_channel: gcp.monitoring.NotificationChannel = None,
 ):
     """
@@ -172,7 +169,7 @@ def create_cloud_function(
         region=config_values['REGION'],
         build_environment_variables=env,
         environment_variables=env,
-        service_account_email=service_account.email,
+        service_account_email=service_account,
         available_memory_mb=1024,
         timeout=540,
         opts=pulumi.ResourceOptions(
@@ -180,7 +177,7 @@ def create_cloud_function(
                 function_bucket,
                 source_archive_object,
                 pubsub_topic,
-                service_account,
+                # service_account,
             ]
         ),
     )

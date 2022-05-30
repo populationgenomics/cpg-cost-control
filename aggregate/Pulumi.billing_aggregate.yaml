@@ -1,6 +1,7 @@
 config:
   gcp:project: billing-admin-290403
   gcp:region: australia-southeast1
+  opts:service_account: aggregate-billing@billing-admin-290403.iam.gserviceaccount.com
   opts:functions:
     - gcp
     - hail
