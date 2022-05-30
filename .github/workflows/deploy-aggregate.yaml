@@ -78,11 +78,14 @@ jobs:
         working-directory: aggregate
       
       - name: Pulumi
-        uses: pulumi/actions@v3
+        run: pulumi up -s billing_aggregate -y
         with:
-          command: up
-          stack-name: billing_aggregate
-          work-dir: aggregate
+          working-directory: aggregate
+        # uses: pulumi/actions@v3
+        # with:
+        #   command: up
+        #   work-dir: aggregate
+        #   stack-name: billing_aggregate
         
           
 
