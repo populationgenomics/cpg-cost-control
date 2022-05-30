@@ -52,7 +52,7 @@ on: push
   #     - main
 
 env:
-  GOOGLE_CREDENTIALS: '{{ secrets.GCP_CREDENTIALS }}'
+  PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
       
 jobs:
   deploy:
@@ -85,5 +85,6 @@ jobs:
         with:
           command: up
           stack-name: billing_aggregate
+        
           
 
