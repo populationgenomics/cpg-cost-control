@@ -19,6 +19,19 @@ import pulumi
 import pulumi_gcp as gcp
 
 
+# NOTE: Uncomment the below code when launching pulumi locally
+# after running `pulumi up` or an equivalent command, then hit F5 to connect the
+# vscode debugger. Helpful for finding hidden pulumi errors
+
+# import debugpy
+
+# debugpy.listen(("0.0.0.0", 5678))
+# print("debugpy is listening, attach by pressing F5 or ►")
+
+# debugpy.wait_for_client()
+# print("Attached to debugpy!")
+
+
 # File path to where the Cloud Function's source code is located.
 PATH_TO_SOURCE_CODE = './'
 
@@ -183,11 +196,11 @@ def create_cloud_function(
     )
 
     filter_string = fxn.name.apply(
-        lambda fxn_name: (
-            'resource.type="cloud_function" ',
-            f'AND resource.labels.function_name="{fxn_name}" ',
-            'AND severity >= WARNING',
-        )
+        lambda fxn_name: f"""
+            resource.type="cloud_function"
+            AND resource.labels.function_name="{fxn_name}"
+            AND severity >= WARNING
+        """
     )
 
     # Create the Cloud Function's event alert

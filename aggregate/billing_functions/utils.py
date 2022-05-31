@@ -627,7 +627,8 @@ def get_start_and_end_from_data(data) -> Tuple[Optional[datetime], Optional[date
 
         try:
             start, end = datetime.fromisoformat(start), datetime.fromisoformat(end)
-        except ValueError:
+        except ValueError as error:
+            logging.error(f'Error: {error}')
             return (None, None)
 
         return (start, end)
