@@ -190,12 +190,9 @@ async def migrate_entries_from_hail_batch(
 
             entries.extend(get_finalised_entries_for_batch(batch, proportion_map))
 
-        if dry_run:
-            result = len(entries)
-        else:
-            result += utils.insert_new_rows_in_table(
-                table=utils.GCP_AGGREGATE_DEST_TABLE, obj=entries
-            )
+        result += utils.insert_new_rows_in_table(
+            table=utils.GCP_AGGREGATE_DEST_TABLE, obj=entries, dry_run=dry_run
+        )
 
     return result
 
@@ -273,7 +270,7 @@ def get_finalised_entries_for_batch(
 
     extra_job_resources = defaultdict(int)
     for job in jobs_with_no_dataset:
-
+        job_id = job['job_id']
         for batch_resource, usage in job['resources'].items():
             if batch_resource.startswith('service-fee'):
                 continue
@@ -418,24 +415,24 @@ def migrate_entries_from_bq(
 
             if len(entries_by_id) != 2 * len(credit_entries):
                 logger.warning('Mismatched length of credits')
-            if dry_run:
-                result += len(entries_by_id)
-            else:
-                result += utils.insert_new_rows_in_table(
-                    table=utils.GCP_AGGREGATE_DEST_TABLE, obj=entries_by_id.values()
-                )
+
+            result += utils.insert_new_rows_in_table(
+                table=utils.GCP_AGGREGATE_DEST_TABLE,
+                obj=entries_by_id.values(),
+                dry_run=dry_run,
+            )
             entries_by_id = {}
 
     if entries_by_id:
         entries_by_id.update(
             {e['id']: e for e in utils.get_seqr_credits(entries_by_id.values())}
         )
-        if dry_run:
-            result += len(entries_by_id)
-        else:
-            result += utils.insert_new_rows_in_table(
-                table=utils.GCP_AGGREGATE_DEST_TABLE, obj=entries_by_id.values()
-            )
+
+        result += utils.insert_new_rows_in_table(
+            table=utils.GCP_AGGREGATE_DEST_TABLE,
+            obj=entries_by_id.values(),
+            dry_run=dry_run,
+        )
 
     return result
 
@@ -585,7 +582,7 @@ def get_key_from_batch_job(dataset, batch, job, batch_resource):
 
 
 if __name__ == '__main__':
-    test_start, test_end = None, datetime.now()
+    test_start, test_end = None, None
     # test_start, test_end = datetime(2022, 5, 2), datetime(2022, 5, 5)
 
     asyncio.new_event_loop().run_until_complete(

@@ -187,14 +187,10 @@ async def migrate_hail_data(start, end, token, dry_run=False) -> int:
 
         # Insert new rows into aggregation table
         entries.extend(utils.get_hail_credits(entries))
-        if dry_run:
-            logger.info(f'Skipping insert of {len(entries)} entries (dry_run=True)')
-            result += len(entries)
-        else:
-            logger.info(f'Inserting {len(entries)} entries')
-            result += utils.insert_new_rows_in_table(
-                table=utils.GCP_AGGREGATE_DEST_TABLE, obj=entries
-            )
+
+        result += utils.insert_new_rows_in_table(
+            table=utils.GCP_AGGREGATE_DEST_TABLE, obj=entries, dry_run=dry_run
+        )
 
     return result
 

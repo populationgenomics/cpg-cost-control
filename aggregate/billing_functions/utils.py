@@ -21,7 +21,7 @@ import google.cloud.bigquery as bq
 from google.cloud import secretmanager
 from google.api_core.exceptions import ClientError
 
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)
 
 # fix this later to be a proper configured logger
 logger = logging
@@ -36,7 +36,7 @@ GCP_AGGREGATE_DEST_TABLE = os.getenv(
 )
 
 assert GCP_AGGREGATE_DEST_TABLE
-logging.info(f'GCP_AGGREGATE_DEST_TABLE: {GCP_AGGREGATE_DEST_TABLE}')
+logger.info(f'GCP_AGGREGATE_DEST_TABLE: {GCP_AGGREGATE_DEST_TABLE}')
 
 IS_PRODUCTION = os.getenv('PRODUCTION') in ('1', 'true', 'yes')
 
@@ -115,7 +115,7 @@ async def async_retry_transient_get_json_request(
                 if attempt == attempts:
                     raise
 
-            t = 2**attempt
+            t = 2 ** attempt
             logger.warning(f'Backing off {t} seconds for {url}')
             asyncio.sleep(t)
 
@@ -256,7 +256,7 @@ async def get_batches(
     q = '?' + '&'.join(params)
     url = HAIL_BATCHES_API + q
 
-    logging.debug(f'Getting batches: {url}')
+    logger.debug(f'Getting batches: {url}')
 
     return await async_retry_transient_get_json_request(
         url,
@@ -281,7 +281,7 @@ async def get_finished_batches_for_date(
     n_requests = 0
     skipped = 0
 
-    logging.info(f'Getting batches for range: [{start}, {end}]')
+    logger.info(f'Getting batches for range: [{start}, {end}]')
 
     while True:
 
@@ -306,7 +306,7 @@ async def get_finished_batches_for_date(
             in_date_range = start <= time_completed < end
 
             if time_completed < start:
-                logging.info(
+                logger.info(
                     f'{billing_project} :: Got {len(batches)} batches '
                     f'in {n_requests} requests, skipping {skipped}'
                 )
@@ -331,7 +331,7 @@ async def get_jobs_for_batch(batch_id, token: str) -> List[str]:
             iterations += 1
 
             if iterations > 1 and iterations % 5 == 0:
-                logging.info(f'On {iterations} iteration to load jobs for {batch_id}')
+                logger.info(f'On {iterations} iteration to load jobs for {batch_id}')
 
             q = '?limit=9999'
             if last_job_id:
@@ -369,11 +369,13 @@ def billing_row_to_topic(row, dataset_to_gcp_map) -> Optional[str]:
     return topic
 
 
-def insert_new_rows_in_table(table: str, obj: List[Dict[str, Any]]) -> int:
+def insert_new_rows_in_table(
+    table: str, obj: List[Dict[str, Any]], dry_run: bool
+) -> int:
     """Insert JSON rows into a BQ table"""
 
     if not obj:
-        logging.info('Not inserting any rows')
+        logger.info('Not inserting any rows')
         return 0
 
     _query = f"""
@@ -406,11 +408,15 @@ def insert_new_rows_in_table(table: str, obj: List[Dict[str, Any]]) -> int:
     nrows = len(filtered_obj)
 
     if nrows == 0:
-        logging.info(f'Not inserting any rows (0/{len(obj)})')
+        logger.info(f'Not inserting any rows (0/{len(obj)})')
         return 0
 
+    if dry_run:
+        logger.info(f'DRY_RUN: Inserting {nrows}/{len(obj)} rows')
+        return nrows
+
     # Count number of rows adding
-    logging.info(f'Inserting {nrows}/{len(obj)} rows')
+    logger.info(f'Inserting {nrows}/{len(obj)} rows')
 
     # Insert the new rows
     job_config = bq.LoadJobConfig()
@@ -424,9 +430,9 @@ def insert_new_rows_in_table(table: str, obj: List[Dict[str, Any]]) -> int:
     )
     try:
         result = resp.result()
-        logging.info(f'Inserted {result.output_rows}/{nrows} rows')
+        logger.info(f'Inserted {result.output_rows}/{nrows} rows')
     except ClientError as e:
-        logging.error(resp.errors)
+        logger.error(resp.errors)
         raise e
 
     return nrows
@@ -464,7 +470,7 @@ def insert_dataframe_rows_in_table(table: str, df: pd.DataFrame):
         if_exists='append',
     )
 
-    logging.info(f'{adding_rows} new rows inserted')
+    logger.info(f'{adding_rows} new rows inserted')
     return adding_rows
 
 
@@ -481,7 +487,7 @@ def get_currency_conversion_rate_for_time(time: datetime):
 
     key = f'{time.year}-{time.month}'
     if key not in CACHED_CURRENCY_CONVERSION:
-        logging.info(f'Looking up currency conversion rate for {key}')
+        logger.info(f'Looking up currency conversion rate for {key}')
         query = f"""
             SELECT currency_conversion_rate
             FROM {GCP_BILLING_BQ_TABLE}
@@ -620,7 +626,7 @@ def get_start_and_end_from_data(data) -> Tuple[Optional[datetime], Optional[date
         elif data.get('message'):
             dates = dict(json.loads(data['message'])) or {}
 
-        logging.info(f'data: {data}, dates: {dates}')
+        logger.info(f'data: {data}, dates: {dates}')
 
         start = dates.get('start', '')
         end = dates.get('end', '')
@@ -628,7 +634,7 @@ def get_start_and_end_from_data(data) -> Tuple[Optional[datetime], Optional[date
         try:
             start, end = datetime.fromisoformat(start), datetime.fromisoformat(end)
         except ValueError as error:
-            logging.error(f'Error: {error}')
+            logger.error(f'Error: {error}')
             return (None, None)
 
         return (start, end)
