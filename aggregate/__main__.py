@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # Disable rule for that module-level exports be ALL_CAPS, for legibility.
-# pylint: disable=C0103,missing-function-docstring
+# pylint: disable=C0103,missing-function-docstring,W0613
 """
 Python Pulumi program for creating Google Cloud Functions.
 
@@ -119,7 +119,7 @@ def main():
     # Create slack notificaiton channel for all functions
     # Use cli command below to retrieve the required 'labels'
     # $ gcloud beta monitoring channel-descriptors describe slack
-    slack_notification_channel = gcp.monitoring.NotificationChannel(
+    slack_channel = gcp.monitoring.NotificationChannel(
         f'{name}-slack-notification-channel',
         display_name=f'{name.capitalize()} Slack Notification Channel',
         type='slack',
@@ -140,7 +140,7 @@ def main():
             function_bucket=function_bucket,
             source_archive_object=source_archive_object,
             service_account=service_account,
-            slack_notification_channel=slack_notification_channel,
+            slack_channel=slack_channel,
         )
 
         pulumi.export(f'{function}_fxn_name', fxn.name)
@@ -157,7 +157,7 @@ def create_cloud_function(
     pubsub_topic: gcp.pubsub.Topic = None,
     function_bucket: gcp.storage.Bucket = None,
     source_archive_object: gcp.storage.BucketObject = None,
-    slack_notification_channel: gcp.monitoring.NotificationChannel = None,
+    slack_channel: gcp.monitoring.NotificationChannel = None,
 ):
     """
     Create a single Cloud Function. Include the pubsub trigger and event alerts
@@ -195,39 +195,41 @@ def create_cloud_function(
         ),
     )
 
-    filter_string = fxn.name.apply(
-        lambda fxn_name: f"""
-            resource.type="cloud_function"
-            AND resource.labels.function_name="{fxn_name}"
-            AND severity >= WARNING
-        """
-    )
-
+    # TODO: Re-enable notifications
+    # filter_string = fxn.name.apply(
+    #     lambda fxn_name: f"""
+    #         resource.type="cloud_function"
+    #         AND resource.labels.function_name="{fxn_name}"
+    #         AND severity >= WARNING
+    #     """
+    # )
+    #
     # Create the Cloud Function's event alert
-    alert_condition = gcp.monitoring.AlertPolicyConditionArgs(
-        condition_matched_log=(
-            gcp.monitoring.AlertPolicyConditionConditionMatchedLogArgs(
-                filter=filter_string,
-            )
-        ),
-        display_name='Function warning/error',
-    )
-    alert_rate = gcp.monitoring.AlertPolicyAlertStrategyArgs(
-        notification_rate_limit=(
-            gcp.monitoring.AlertPolicyAlertStrategyNotificationRateLimitArgs(
-                period='300s'
-            )
-        ),
-    )
-    alert_policy = gcp.monitoring.AlertPolicy(
-        f'{name}-billing-function-error-alert',
-        display_name=f'{name.capitalize()} Billing Function Error Alert',
-        combiner='OR',
-        notification_channels=[slack_notification_channel],
-        conditions=[alert_condition],
-        alert_strategy=alert_rate,
-        opts=pulumi.ResourceOptions(depends_on=[fxn]),
-    )
+    # alert_condition = gcp.monitoring.AlertPolicyConditionArgs(
+    #     condition_matched_log=(
+    #         gcp.monitoring.AlertPolicyConditionConditionMatchedLogArgs(
+    #             filter=filter_string,
+    #         )
+    #     ),
+    #     display_name='Function warning/error',
+    # )
+    # alert_rate = gcp.monitoring.AlertPolicyAlertStrategyArgs(
+    #     notification_rate_limit=(
+    #         gcp.monitoring.AlertPolicyAlertStrategyNotificationRateLimitArgs(
+    #             period='300s'
+    #         )
+    #     ),
+    # )
+    # alert_policy = gcp.monitoring.AlertPolicy(
+    #     f'{name}-billing-function-error-alert',
+    #     display_name=f'{name.capitalize()} Billing Function Error Alert',
+    #     combiner='OR',
+    #     notification_channels=[slack_channel],
+    #     conditions=[alert_condition],
+    #     alert_strategy=alert_rate,
+    #     opts=pulumi.ResourceOptions(depends_on=[fxn]),
+    # )
+    alert_policy = None
 
     return fxn, trigger, alert_policy
 
