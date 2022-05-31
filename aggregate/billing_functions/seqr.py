@@ -308,7 +308,7 @@ def get_finalised_entries_for_batch(
                                 'distributed',
                                 dataset,
                                 batch_resource,
-                                batch_id,
+                                str(batch_id),
                             ]
                         ),
                         topic=dataset,
