@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # Disable rule for that module-level exports be ALL_CAPS, for legibility.
-# pylint: disable=C0103,missing-function-docstring
+# pylint: disable=C0103,missing-function-docstring,W0613
 """
 Python Pulumi program for creating Google Cloud Functions.
 
@@ -19,14 +19,28 @@ import pulumi
 import pulumi_gcp as gcp
 
 
+# NOTE: Uncomment the below code when launching pulumi locally
+# after running `pulumi up` or an equivalent command, then hit F5 to connect the
+# vscode debugger. Helpful for finding hidden pulumi errors
+
+# import debugpy
+
+# debugpy.listen(("0.0.0.0", 5678))
+# print("debugpy is listening, attach by pressing F5 or ►")
+
+# debugpy.wait_for_client()
+# print("Attached to debugpy!")
+
+
 # File path to where the Cloud Function's source code is located.
 PATH_TO_SOURCE_CODE = './'
 
 
 def main():
-
-    # Get values from Pulumi config to use as
-    # environment variables in our Cloud Function.
+    """
+    Get values from Pulumi config to use as
+    environment variables in our Cloud Function.
+    """
     gcp_opts = pulumi.Config(name='gcp')
     opts = pulumi.Config(name='opts')
 
@@ -105,28 +119,28 @@ def main():
     # Create slack notificaiton channel for all functions
     # Use cli command below to retrieve the required 'labels'
     # $ gcloud beta monitoring channel-descriptors describe slack
-    slack_notification_channel = gcp.monitoring.NotificationChannel(
-        f"{name}-slack-notification-channel",
-        display_name=f"{name.capitalize()} Slack Notification Channel",
-        type="slack",
+    slack_channel = gcp.monitoring.NotificationChannel(
+        f'{name}-slack-notification-channel',
+        display_name=f'{name.capitalize()} Slack Notification Channel',
+        type='slack',
         labels={
             'auth_token': config_values['SLACK_AUTH_TOKEN'],
             'channel_name': config_values['SLACK_CHANNEL'],
         },
-        description="Slack notification channel for all gcp cost aggregator functions",
+        description='Slack notification channel for all gcp cost aggregator functions',
         project=config_values['PROJECT'],
     )
 
     for function in functions:
         # Create the function and it's corresponding pubsub and subscription.
-        fxn, trigger, alert_policy = create_cloud_function(
+        fxn, _, _ = create_cloud_function(
             name=function,
             config_values=config_values,
             pubsub_topic=pubsub,
             function_bucket=function_bucket,
             source_archive_object=source_archive_object,
             service_account=service_account,
-            slack_notification_channel=slack_notification_channel,
+            slack_channel=slack_channel,
         )
 
         pulumi.export(f'{function}_fxn_name', fxn.name)
@@ -138,12 +152,12 @@ def b64encode_str(s: str) -> str:
 
 def create_cloud_function(
     name: str = '',
-    config_values: dict = {},
+    config_values: dict = None,
     service_account: str = None,
     pubsub_topic: gcp.pubsub.Topic = None,
     function_bucket: gcp.storage.Bucket = None,
     source_archive_object: gcp.storage.BucketObject = None,
-    slack_notification_channel: gcp.monitoring.NotificationChannel = None,
+    slack_channel: gcp.monitoring.NotificationChannel = None,
 ):
     """
     Create a single Cloud Function. Include the pubsub trigger and event alerts
@@ -177,36 +191,45 @@ def create_cloud_function(
                 function_bucket,
                 source_archive_object,
                 pubsub_topic,
-                # service_account,
             ]
         ),
     )
 
-    filter_string = fxn.name.apply(
-        lambda fxn_name: f'resource.type="cloud_function" AND resource.labels.function_name="{fxn_name}" AND severity >= WARNING'
-    )
-
+    # TODO: Re-enable notifications
+    # filter_string = fxn.name.apply(
+    #     lambda fxn_name: f"""
+    #         resource.type="cloud_function"
+    #         AND resource.labels.function_name="{fxn_name}"
+    #         AND severity >= WARNING
+    #     """
+    # )
+    #
     # Create the Cloud Function's event alert
-    alert_policy = gcp.monitoring.AlertPolicy(
-        f"{name}-billing-function-error-alert",
-        display_name=f"{name.capitalize()} Billing Function Error Alert",
-        combiner="OR",
-        notification_channels=[slack_notification_channel],
-        conditions=[
-            gcp.monitoring.AlertPolicyConditionArgs(
-                condition_matched_log=gcp.monitoring.AlertPolicyConditionConditionMatchedLogArgs(
-                    filter=filter_string,
-                ),
-                display_name='Function warning/error',
-            )
-        ],
-        alert_strategy=gcp.monitoring.AlertPolicyAlertStrategyArgs(
-            notification_rate_limit=gcp.monitoring.AlertPolicyAlertStrategyNotificationRateLimitArgs(
-                period="300s"
-            ),
-        ),
-        opts=pulumi.ResourceOptions(depends_on=[fxn]),
-    )
+    # alert_condition = gcp.monitoring.AlertPolicyConditionArgs(
+    #     condition_matched_log=(
+    #         gcp.monitoring.AlertPolicyConditionConditionMatchedLogArgs(
+    #             filter=filter_string,
+    #         )
+    #     ),
+    #     display_name='Function warning/error',
+    # )
+    # alert_rate = gcp.monitoring.AlertPolicyAlertStrategyArgs(
+    #     notification_rate_limit=(
+    #         gcp.monitoring.AlertPolicyAlertStrategyNotificationRateLimitArgs(
+    #             period='300s'
+    #         )
+    #     ),
+    # )
+    # alert_policy = gcp.monitoring.AlertPolicy(
+    #     f'{name}-billing-function-error-alert',
+    #     display_name=f'{name.capitalize()} Billing Function Error Alert',
+    #     combiner='OR',
+    #     notification_channels=[slack_channel],
+    #     conditions=[alert_condition],
+    #     alert_strategy=alert_rate,
+    #     opts=pulumi.ResourceOptions(depends_on=[fxn]),
+    # )
+    alert_policy = None
 
     return fxn, trigger, alert_policy
 

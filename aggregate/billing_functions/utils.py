@@ -625,10 +625,14 @@ def get_start_and_end_from_data(data) -> Tuple[Optional[datetime], Optional[date
         start = dates.get('start', '')
         end = dates.get('end', '')
 
-        if start and end:
-            return datetime.fromisoformat(start), datetime.fromisoformat(end)
+        try:
+            start, end = datetime.fromisoformat(start), datetime.fromisoformat(end)
+        except ValueError as error:
+            logging.error(f'Error: {error}')
+            return (None, None)
 
-        return start, end
+        return (start, end)
+
     return (None, None)
 
 

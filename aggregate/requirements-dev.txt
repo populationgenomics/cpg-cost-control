@@ -1,5 +1,5 @@
 black>=22.3.0
-pre-commit
-pylint
-pulumi==3.33.2
-pulumi-gcp==6.21.0
+flake8
+pre-commit==2.19.0
+pylint==2.13.9
+debugpy==1.6.0

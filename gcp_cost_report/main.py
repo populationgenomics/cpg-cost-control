@@ -229,7 +229,7 @@ def get_percent_used_from_budget(b, last_month_total, currency) -> Tuple[float, 
 
     else:
         logging.warning(
-            "Couldn't determine the budget amount from the budget, "
+            'Couldn\'t determine the budget amount from the budget, '
             f'inner_amount.units: {inner_amount.units}, '
             f'monthly_used_float: {monthly_used_float}'
         )

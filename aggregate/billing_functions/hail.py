@@ -112,8 +112,10 @@ def get_finalised_entries_for_batch(batch: dict) -> List[Dict]:
         )
         entries.append(
             utils.get_entry(
-                key=f'{SERVICE_ID}-{dataset}-batch-{batch_id}-{batch_resource}'.replace(
-                    '/', '-'
+                key=(
+                    f'{SERVICE_ID}-{dataset}-batch-{batch_id}-{batch_resource}'.replace(
+                        '/', '-'
+                    )
                 ),
                 topic=dataset,
                 service_id=SERVICE_ID,
