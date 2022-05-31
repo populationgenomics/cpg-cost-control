@@ -305,7 +305,10 @@ def get_finalised_entries_for_batch(
                                 'distributed',
                                 dataset,
                                 batch_resource,
+                                'batch',
                                 str(batch_id),
+                                'job',
+                                str(job_id),
                             ]
                         ),
                         topic=dataset,
@@ -586,5 +589,5 @@ if __name__ == '__main__':
     # test_start, test_end = datetime(2022, 5, 2), datetime(2022, 5, 5)
 
     asyncio.new_event_loop().run_until_complete(
-        main(start=test_start, end=test_end, dry_run=False)
+        main(start=test_start, end=test_end, dry_run=True)
     )

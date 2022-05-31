@@ -115,7 +115,7 @@ async def async_retry_transient_get_json_request(
                 if attempt == attempts:
                     raise
 
-            t = 2 ** attempt
+            t = 2**attempt
             logger.warning(f'Backing off {t} seconds for {url}')
             asyncio.sleep(t)
 
