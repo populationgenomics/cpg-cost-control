@@ -248,7 +248,7 @@ async def get_batches(
     if billing_project:
         qparams['billing_project'] = billing_project
 
-    params = []
+    params = ['q=']
     params.extend(f'q={k}:{v}' for k, v in qparams.items())
     if last_batch_id:
         params.append(f'last_batch_id={last_batch_id}')
