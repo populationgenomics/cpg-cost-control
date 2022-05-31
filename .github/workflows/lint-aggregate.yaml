@@ -20,6 +20,8 @@ jobs:
         run: |
           pip install -r aggregate/requirements-dev.txt
           pip install -r aggregate/requirements.txt
+          pip install -r gcp_cost_control/requirements.txt
+          pip install -r gcp_cost_report/requirements.txt
 
       - name: pre-commit
         run: pre-commit run --all-files
