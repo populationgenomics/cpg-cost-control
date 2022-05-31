@@ -24,9 +24,10 @@ PATH_TO_SOURCE_CODE = './'
 
 
 def main():
-
-    # Get values from Pulumi config to use as
-    # environment variables in our Cloud Function.
+    """
+    Get values from Pulumi config to use as
+    environment variables in our Cloud Function.
+    """
     gcp_opts = pulumi.Config(name='gcp')
     opts = pulumi.Config(name='opts')
 
@@ -106,20 +107,20 @@ def main():
     # Use cli command below to retrieve the required 'labels'
     # $ gcloud beta monitoring channel-descriptors describe slack
     slack_notification_channel = gcp.monitoring.NotificationChannel(
-        f"{name}-slack-notification-channel",
-        display_name=f"{name.capitalize()} Slack Notification Channel",
-        type="slack",
+        f'{name}-slack-notification-channel',
+        display_name=f'{name.capitalize()} Slack Notification Channel',
+        type='slack',
         labels={
             'auth_token': config_values['SLACK_AUTH_TOKEN'],
             'channel_name': config_values['SLACK_CHANNEL'],
         },
-        description="Slack notification channel for all gcp cost aggregator functions",
+        description='Slack notification channel for all gcp cost aggregator functions',
         project=config_values['PROJECT'],
     )
 
     for function in functions:
         # Create the function and it's corresponding pubsub and subscription.
-        fxn, trigger, alert_policy = create_cloud_function(
+        fxn, _, _ = create_cloud_function(
             name=function,
             config_values=config_values,
             pubsub_topic=pubsub,
@@ -138,7 +139,7 @@ def b64encode_str(s: str) -> str:
 
 def create_cloud_function(
     name: str = '',
-    config_values: dict = {},
+    config_values: dict = None,
     service_account: str = None,
     pubsub_topic: gcp.pubsub.Topic = None,
     function_bucket: gcp.storage.Bucket = None,
@@ -177,34 +178,41 @@ def create_cloud_function(
                 function_bucket,
                 source_archive_object,
                 pubsub_topic,
-                # service_account,
             ]
         ),
     )
 
     filter_string = fxn.name.apply(
-        lambda fxn_name: f'resource.type="cloud_function" AND resource.labels.function_name="{fxn_name}" AND severity >= WARNING'
+        lambda fxn_name: (
+            'resource.type="cloud_function" ',
+            f'AND resource.labels.function_name="{fxn_name}" ',
+            'AND severity >= WARNING',
+        )
     )
 
     # Create the Cloud Function's event alert
-    alert_policy = gcp.monitoring.AlertPolicy(
-        f"{name}-billing-function-error-alert",
-        display_name=f"{name.capitalize()} Billing Function Error Alert",
-        combiner="OR",
-        notification_channels=[slack_notification_channel],
-        conditions=[
-            gcp.monitoring.AlertPolicyConditionArgs(
-                condition_matched_log=gcp.monitoring.AlertPolicyConditionConditionMatchedLogArgs(
-                    filter=filter_string,
-                ),
-                display_name='Function warning/error',
+    alert_condition = gcp.monitoring.AlertPolicyConditionArgs(
+        condition_matched_log=(
+            gcp.monitoring.AlertPolicyConditionConditionMatchedLogArgs(
+                filter=filter_string,
             )
-        ],
-        alert_strategy=gcp.monitoring.AlertPolicyAlertStrategyArgs(
-            notification_rate_limit=gcp.monitoring.AlertPolicyAlertStrategyNotificationRateLimitArgs(
-                period="300s"
-            ),
         ),
+        display_name='Function warning/error',
+    )
+    alert_rate = gcp.monitoring.AlertPolicyAlertStrategyArgs(
+        notification_rate_limit=(
+            gcp.monitoring.AlertPolicyAlertStrategyNotificationRateLimitArgs(
+                period='300s'
+            )
+        ),
+    )
+    alert_policy = gcp.monitoring.AlertPolicy(
+        f'{name}-billing-function-error-alert',
+        display_name=f'{name.capitalize()} Billing Function Error Alert',
+        combiner='OR',
+        notification_channels=[slack_notification_channel],
+        conditions=[alert_condition],
+        alert_strategy=alert_rate,
         opts=pulumi.ResourceOptions(depends_on=[fxn]),
     )
 

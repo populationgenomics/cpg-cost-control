@@ -47,10 +47,9 @@
 name: Billing Aggregation Deploy
 
 on:
-  push
-  # push:
-  #   branches:
-  #     - main
+  push:
+    branches:
+      - main
 
 env:
   PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
