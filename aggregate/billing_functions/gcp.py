@@ -69,7 +69,8 @@ def migrate_billing_data(start, end, dataset_to_gcp_map) -> int:
     )
 
     migrate_rows = (
-        utils.bigquery_client.query(_query, job_config=job_config)
+        utils.get_bigquery_client()
+        .query(_query, job_config=job_config)
         .result()
         .to_dataframe()
     )

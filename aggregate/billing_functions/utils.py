@@ -30,6 +30,8 @@ if os.getenv('DEV') in ('1', 'true', 'yes'):
 else:
     logger.setLevel(logging.INFO)
 
+# pylint: disable=invalid-name
+T = TypeVar('T')
 
 DEFAULT_TOPIC = 'admin'
 
@@ -92,9 +94,15 @@ SEQR_PROJECT_FIELD = {
 }
 
 
-bigquery_client = bq.Client()
-# pylint: disable=invalid-name
-T = TypeVar('T')
+_BQ_CLIENT: bq.Client = None
+
+
+def get_bigquery_client():
+    """Get instantiated cached bq client"""
+    global _BQ_CLIENT
+    if not _BQ_CLIENT:
+        _BQ_CLIENT = bq.Client()
+    return _BQ_CLIENT
 
 
 async def async_retry_transient_get_json_request(
@@ -486,7 +494,7 @@ def insert_new_rows_in_table(
             ]
         )
 
-        result = bigquery_client.query(_query, job_config=job_config).result()
+        result = get_bigquery_client().query(_query, job_config=job_config).result()
         existing_ids = set(result.to_dataframe()['id'])
 
         # Filter out any rows that are already in the table
@@ -513,7 +521,7 @@ def insert_new_rows_in_table(
 
         j = '\n'.join(json.dumps(o) for o in filtered_obj)
 
-        resp = bigquery_client.load_table_from_file(
+        resp = get_bigquery_client().load_table_from_file(
             StringIO(j), table, job_config=job_config
         )
         try:
@@ -541,7 +549,7 @@ def insert_dataframe_rows_in_table(table: str, df: pd.DataFrame):
             bq.ArrayQueryParameter('ids', 'STRING', list(set(df['id']))),
         ]
     )
-    result = bigquery_client.query(_query, job_config=job_config).result()
+    result = get_bigquery_client().query(_query, job_config=job_config).result()
     existing_ids = set(result.to_dataframe()['id'])
 
     # Filter out any rows that are already in the table
@@ -586,7 +594,7 @@ def get_currency_conversion_rate_for_time(time: datetime):
             WHERE DATE(_PARTITIONTIME) = DATE('{time.date()}')
             LIMIT 1
         """
-        for r in bigquery_client.query(query).result():
+        for r in get_bigquery_client().query(query).result():
             CACHED_CURRENCY_CONVERSION[key] = r['currency_conversion_rate']
 
     return CACHED_CURRENCY_CONVERSION[key]

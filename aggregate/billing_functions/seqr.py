@@ -292,7 +292,8 @@ def migrate_entries_from_bq(
         )
 
         df = (
-            utils.bigquery_client.query(_query, job_config=job_config)
+            utils.get_bigquery_client()
+            .query(_query, job_config=job_config)
             .result()
             .to_dataframe()
         )
