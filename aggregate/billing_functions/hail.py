@@ -35,7 +35,7 @@ except ImportError:
 
 
 SERVICE_ID = 'hail'
-EXCLUDED_BATCH_PROJECTS = {'seqr'}
+EXCLUDED_BATCH_PROJECTS = {'hail', 'seqr'}
 
 
 logger = utils.logger
@@ -49,8 +49,7 @@ def get_billing_projects():
     server_config = json.loads(
         read_secret(utils.ANALYSIS_RUNNER_PROJECT_ID, 'server-config')
     )
-    datasets_to_ignore = {'hail', 'seqr'}
-    ds = list(set(server_config.keys()) - datasets_to_ignore)
+    ds = list(set(server_config.keys()) - EXCLUDED_BATCH_PROJECTS)
     return ds
 
 
