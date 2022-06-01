@@ -1,4 +1,4 @@
-name: Billing Aggregation Lint
+name: Lint
 on: push
 
 jobs:

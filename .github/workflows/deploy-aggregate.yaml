@@ -7,42 +7,25 @@
 #
 # To configure this workflow:
 #
-# 1. Ensure the required Google Cloud APIs are enabled:
+# 1. Ensure the required IAM permissions are granted to the Service Account
 #
-#    Cloud Run            run.googleapis.com
-#    Cloud Build          cloudbuild.googleapis.com
-#    Artifact Registry    artifactregistry.googleapis.com
+#    BigQuery Data Editor
+#    BigQuery Job User
+#    BigQuery Read Session User
+#    Editor
 #
-# 2. Create and configure Workload Identity Federation for GitHub (https://github.com/google-github-actions/auth#setting-up-workload-identity-federation)
+# 2. Create the pulumi account with the service account email then copy the
+#    PULUMI_ACCESS_TOKEN for that account and the GCP_CREDENTIALS (json) are saved
+#    as GitHub secrets in this repo
 #
-# 3. Ensure the required IAM permissions are granted
+# 3. Add the SLACK_AUTH_TOKEN that is used for the pulumi deploy into a GitHub secret
+#    Make sure that it has sufficient permissions for the slack channel you want the
+#    software alerts to go to. See opts:slack_channel in the Pulumi config file for
+#    what channel alerts will go to.
 #
-#    Cloud Run
-#      roles/run.admin
-#      roles/iam.serviceAccountUser     (to act as the Cloud Run runtime service account)
+# 4. Set the gcp options for project, region the gcp service account email as well as
+#    slack channel in the pulumi config file Pulumi.billing_aggregate.yaml
 #
-#    Cloud Build
-#      roles/cloudbuild.builds.editor
-#
-#    Cloud Storage
-#      roles/storage.objectAdmin
-#
-#    Artifact Registry
-#      roles/artifactregistry.admin     (project or repository level)
-#
-#    NOTE: You should always follow the principle of least privilege when assigning IAM roles
-#
-# 4. Create GitHub secrets for WIF_PROVIDER and WIF_SERVICE_ACCOUNT
-#
-# 5. Change the values for the SERVICE and REGION environment variables (below).
-#
-# For more support on how to run this workflow, please visit https://github.com/marketplace/actions/deploy-to-cloud-run
-#
-# Further reading:
-#   Cloud Run runtime service account   - https://cloud.google.com/run/docs/securing/service-identity
-#   Cloud Run IAM permissions           - https://cloud.google.com/run/docs/deploying-source-code#permissions_required_to_deploy
-#   Cloud Run builds from source        - https://cloud.google.com/run/docs/deploying-source-code
-#   Principle of least privilege        - https://cloud.google.com/blog/products/identity-security/dont-get-pwned-practicing-the-principle-of-least-privilege
 
 name: Billing Aggregation Deploy
 
@@ -50,7 +33,6 @@ on:
   push:
     branches:
       - main
-      - aggregation
 
 env:
   PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}

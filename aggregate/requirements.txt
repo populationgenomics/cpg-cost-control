@@ -6,7 +6,5 @@ google-cloud-secret-manager==2.0.0
 google-cloud-bigquery==3.0.1
 pandas==1.4.2
 pandas-gbq==0.17.4
-pulumi==3.33.2
 sample-metadata>=4.9.4
-pulumi-gcp==6.21.0
 slack==0.0.2

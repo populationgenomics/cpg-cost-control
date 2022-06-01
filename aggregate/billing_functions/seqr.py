@@ -48,6 +48,8 @@ from sample_metadata.model.analysis_type import AnalysisType
 from sample_metadata.model.analysis_status import AnalysisStatus
 from sample_metadata.model.analysis_query_model import AnalysisQueryModel
 
+from aggregate.billing_functions.utils import HAIL_PROJECT_FIELD, SEQR_PROJECT_FIELD
+
 try:
     from . import utils
 except ImportError:
@@ -253,7 +255,7 @@ def get_finalised_entries_for_batch(
             )
 
             entries.append(
-                utils.get_entry(
+                utils.get_hail_entry(
                     key=get_key_from_batch_job(dataset, batch, job, batch_resource),
                     topic=dataset,
                     service_id=SERVICE_ID,
@@ -298,7 +300,7 @@ def get_finalised_entries_for_batch(
                 cost = gross_cost * fraction
 
                 entries.append(
-                    utils.get_entry(
+                    utils.get_hail_entry(
                         key='-'.join(
                             [
                                 SERVICE_ID,
@@ -328,7 +330,7 @@ def get_finalised_entries_for_batch(
                     )
                 )
 
-    entries.extend(utils.get_hail_credits(entries))
+    entries.extend(utils.get_credits(entries, topic='hail', project=HAIL_PROJECT_FIELD))
 
     return entries
 
@@ -412,7 +414,10 @@ def migrate_entries_from_bq(
 
             # insert all entries here
             credit_entries = {
-                e['id']: e for e in utils.get_seqr_credits(entries_by_id.values())
+                e['id']: e
+                for e in utils.get_credits(
+                    entries_by_id.values(), topic='seqr', project=SEQR_PROJECT_FIELD
+                )
             }
             entries_by_id.update(credit_entries)
 
@@ -428,7 +433,12 @@ def migrate_entries_from_bq(
 
     if entries_by_id:
         entries_by_id.update(
-            {e['id']: e for e in utils.get_seqr_credits(entries_by_id.values())}
+            {
+                e['id']: e
+                for e in utils.get_credits(
+                    entries_by_id.values(), topic='seqr', project=SEQR_PROJECT_FIELD
+                )
+            }
         )
 
         result += utils.insert_new_rows_in_table(

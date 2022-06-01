@@ -2,12 +2,27 @@
 # Disable rule for that module-level exports be ALL_CAPS, for legibility.
 # pylint: disable=C0103,missing-function-docstring,W0613
 """
-Python Pulumi program for creating Google Cloud Functions.
+Python Pulumi program for creating Aggregate Billing Function Stack.
 
-TODO: Modify this program to create all our aggregate cloud functions.
+Requires:
+    - Service Account in the gcp project of deployment
+        (see .github/workflows/deploy-aggregate.yml for details)
+    - Pulumi.billing_aggregate.yaml file configured with correct values
+        * gcp:project (gcp project name)
+        * gcp:region (e.g. us-central1)
+        * opts:service_account (with permissions already added)
+        * opts:functions (list of functions in aggregate/ folder to deploy)
+        * opts:destination (BQ table to write to)
+        * opts:slack_channel (slack channel to post to)
 
-Create a single Google Cloud Function. The deployed application will calculate
-the estimated travel time to a given location, sending the results via SMS.
+Creates the following:
+    - Enable Cloud Function Service
+    - Create a bucket for the function source code
+    - Create bucket object for the function source code and put it in the bucket
+    - Create a pubsub topic and cloud scheduler for the functions
+    - Create a slack notification channel for all functions
+    - Create a cloud function for each function
+
 """
 
 import os
@@ -59,7 +74,7 @@ def main():
     bucket_name = f'{name}-{config_values["PROJECT"]}'
 
     # Start by enabling all cloud function services
-    gcp.projects.Service(
+    cloud_service = gcp.projects.Service(
         'cloudfunctions-service',
         service='cloudfunctions.googleapis.com',
         disable_on_destroy=False,
@@ -91,9 +106,6 @@ def main():
         source=archive,
     )
 
-    # Create Service Account
-    service_account = config_values['GCP_SERVICE_ACCOUNT']
-
     # Create the Cloud Function, deploying the source we just uploaded to Google
     # Cloud Storage.
     functions = ast.literal_eval(config_values['FUNCTIONS'])
@@ -108,9 +120,10 @@ def main():
             topic_name=pubsub.id,
             data=b64encode_str('Run the functions'),
         ),
-        schedule='every 24 hours',
+        schedule='0 8 * * *',
         project=config_values['PROJECT'],
         region=config_values['REGION'],
+        time_zone='Australia/Sydney',
         opts=pulumi.ResourceOptions(depends_on=[pubsub]),
     )
 
@@ -136,10 +149,11 @@ def main():
         fxn, _, _ = create_cloud_function(
             name=function,
             config_values=config_values,
+            service_account=config_values['GCP_SERVICE_ACCOUNT'],
             pubsub_topic=pubsub,
+            cloud_service=cloud_service,
             function_bucket=function_bucket,
             source_archive_object=source_archive_object,
-            service_account=service_account,
             slack_channel=slack_channel,
         )
 
@@ -156,6 +170,7 @@ def create_cloud_function(
     service_account: str = None,
     pubsub_topic: gcp.pubsub.Topic = None,
     function_bucket: gcp.storage.Bucket = None,
+    cloud_service: gcp.projects.Service = None,
     source_archive_object: gcp.storage.BucketObject = None,
     slack_channel: gcp.monitoring.NotificationChannel = None,
 ):
@@ -175,7 +190,7 @@ def create_cloud_function(
     fxn = gcp.cloudfunctions.Function(
         f'{name}-billing-function',
         entry_point=f'{name}',
-        runtime='python39',
+        runtime='python310',
         event_trigger=trigger,
         source_archive_bucket=function_bucket.name,
         source_archive_object=source_archive_object.name,
@@ -188,9 +203,10 @@ def create_cloud_function(
         timeout=540,
         opts=pulumi.ResourceOptions(
             depends_on=[
+                pubsub_topic,
+                cloud_service,
                 function_bucket,
                 source_archive_object,
-                pubsub_topic,
             ]
         ),
     )

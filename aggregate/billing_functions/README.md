@@ -1,15 +1,11 @@
 # Billing Cloud Functions
 
-
 ## Dependencies
 
 To test locally, must have following packages installed
 
 ```shell
-pip install \
-    pandas \
-    pyarrow \
-    pandas-gbq \
+pip install -r requirements.txt -r requirements-dev.txt
 
 
 ## Azure synchronisation
@@ -17,3 +13,4 @@ pip install \
 TBA
 
 - Probably run on some Azure equivalent of cloud functions, requests billing data for API and transfers GCP aggregate table
+```

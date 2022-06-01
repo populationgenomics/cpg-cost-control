@@ -41,6 +41,8 @@ from typing import Dict, List
 
 from cpg_utils.cloud import read_secret
 
+from aggregate.billing_functions.utils import HAIL_PROJECT_FIELD
+
 try:
     from . import utils
 except ImportError:
@@ -111,7 +113,7 @@ def get_finalised_entries_for_batch(batch: dict) -> List[Dict]:
             * utils.get_usd_cost_for_resource(batch_resource, usage)
         )
         entries.append(
-            utils.get_entry(
+            utils.get_hail_entry(
                 key=(
                     f'{SERVICE_ID}-{dataset}-batch-{batch_id}-{batch_resource}'.replace(
                         '/', '-'
@@ -186,7 +188,9 @@ async def migrate_hail_data(start, end, token, dry_run=False) -> int:
         await asyncio.sleep(1)
 
         # Insert new rows into aggregation table
-        entries.extend(utils.get_hail_credits(entries))
+        entries.extend(
+            utils.get_credits(entries, topic='hail', project=HAIL_PROJECT_FIELD)
+        )
 
         result += utils.insert_new_rows_in_table(
             table=utils.GCP_AGGREGATE_DEST_TABLE, obj=entries, dry_run=dry_run

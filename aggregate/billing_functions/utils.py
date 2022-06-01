@@ -1,4 +1,4 @@
-# pylint: disable=global-statement,too-many-arguments
+# pylint: disable=global-statement,too-many-arguments,line-too-long
 """
 Class of helper functions for billing aggregate functions
 """
@@ -12,7 +12,7 @@ from io import StringIO
 from copy import deepcopy
 from collections import defaultdict
 from datetime import datetime, timedelta
-from typing import Dict, List, Any, Iterator, Optional, Sequence, Tuple, TypeVar, Union
+from typing import Any, Iterator, Sequence, TypeVar
 
 import aiohttp
 import pandas as pd
@@ -25,6 +25,8 @@ logging.basicConfig(level=logging.INFO)
 
 # fix this later to be a proper configured logger
 logger = logging
+
+DEFAULT_TOPIC = 'admin'
 
 GCP_PROJECT = 'billing-admin-290403'
 
@@ -91,7 +93,7 @@ T = TypeVar('T')
 
 async def async_retry_transient_get_json_request(
     url,
-    errors: Union[Exception, Tuple[Exception, ...]],
+    errors: Exception | tuple(Exception, ...),
     *args,
     attempts=5,
     session=None,
@@ -126,7 +128,7 @@ async def async_retry_transient_get_json_request(
         return await inner_block(session2)
 
 
-def chunk(iterable: Sequence[T], chunk_size=50) -> Iterator[Sequence[T]]:
+def chunk(iterable: Sequence[T], chunk_size) -> Iterator[Sequence[T]]:
     """
     Chunk a sequence by yielding lists of `chunk_size`
     """
@@ -142,7 +144,7 @@ def get_bq_schema_json():
         return json.load(f)
 
 
-def _format_bq_schema_json(schema: Dict[str, Any]):
+def _format_bq_schema_json(schema: dict[str, Any]):
     """
     Take bq json schema, and convert it to bq.SchemaField objects"""
     formatted_schema = []
@@ -159,7 +161,7 @@ def _format_bq_schema_json(schema: Dict[str, Any]):
     return formatted_schema
 
 
-def get_formatted_bq_schema() -> List[bq.SchemaField]:
+def get_formatted_bq_schema() -> list[bq.SchemaField]:
     """
     Get schema for bigquery billing table, as a list of bq.SchemaField objects
     """
@@ -190,54 +192,40 @@ def get_hail_token():
     return read_secret(GCP_PROJECT, 'aggregate-billing-hail-token')
 
 
-def get_hail_credits(entries) -> List[Dict[str, Any]]:
+def get_credits(
+    entries,
+    topic: str = 'hail',
+    project: dict = None,
+    description: str = None,
+) -> list(dict(str, Any)):
     """
-    Get a hail credit for each entry
+    Get a hail/seqr credit for each entry
     """
+
+    if not description:
+        description = f'{topic} credit to correctly account for costs'
 
     hail_credits = [deepcopy(e) for e in entries]
     for entry in hail_credits:
 
-        entry['topic'] = 'hail'
+        entry['topic'] = topic
         entry['id'] += '-credit'
         entry['cost'] = -entry['cost']
         entry['service'] = {
             'id': 'aggregated-credit',
-            'description': 'Hail credit to correctly account for costs',
+            'description': description,
         }
         entry['sku']['id'] += '-credit'
         entry['sku']['description'] += '-credit'
-        entry['project'] = HAIL_PROJECT_FIELD
+        entry['project'] = project
 
     return hail_credits
 
 
-def get_seqr_credits(entries) -> List[Dict[str, Any]]:
-    """
-    Get a hail credit for each entry
-    """
-
-    seqr_credits = [deepcopy(e) for e in entries]
-    for entry in seqr_credits:
-
-        entry['topic'] = 'seqr'
-        entry['id'] += '-credit'
-        entry['cost'] = -entry['cost']
-        entry['service'] = {
-            'id': 'aggregated-credit',
-            'description': 'Seqr credit to correctly account for costs',
-        }
-        entry['sku']['id'] += '-credit'
-        entry['sku']['description'] += '-credit'
-        entry['project'] = SEQR_PROJECT_FIELD
-
-    return seqr_credits
-
-
 async def get_batches(
     token: str,
-    billing_project: Optional[str] = None,
-    last_batch_id: Optional[any] = None,
+    billing_project: str | None = None,
+    last_batch_id: Any | None = None,
 ):
     """
     Get list of batches for a billing project with no filtering.
@@ -245,10 +233,11 @@ async def get_batches(
     """
 
     qparams = {}
+    params = []
     if billing_project:
         qparams['billing_project'] = billing_project
-
-    params = ['q=']
+    else:
+        params = ['q=']
     params.extend(f'q={k}:{v}' for k, v in qparams.items())
     if last_batch_id:
         params.append(f'last_batch_id={last_batch_id}')
@@ -269,7 +258,7 @@ async def get_finished_batches_for_date(
     start: datetime,
     end: datetime,
     token: str,
-    billing_project: Optional[str] = None,
+    billing_project: str | None = None,
 ):
     """
     Get all the batches that started on {date} and are complete.
@@ -296,8 +285,10 @@ async def get_finished_batches_for_date(
             )
         last_batch_id = jresponse.get('last_batch_id')
         if not jresponse.get('batches'):
+            logger.error(f'No batches found for range: [{start}, {end}]')
             return batches
         for b in jresponse['batches']:
+            # batch not finished or not finished within the (start, end) range
             if not b['time_completed'] or not b['complete']:
                 skipped += 1
                 continue
@@ -317,7 +308,7 @@ async def get_finished_batches_for_date(
                 skipped += 1
 
 
-async def get_jobs_for_batch(batch_id, token: str) -> List[str]:
+async def get_jobs_for_batch(batch_id, token: str) -> list[str]:
     """
     For a single batch, fill in the 'jobs' field.
     """
@@ -358,19 +349,22 @@ async def get_jobs_for_batch(batch_id, token: str) -> List[str]:
 RE_matcher = re.compile(r'-\d+$')
 
 
-def billing_row_to_topic(row, dataset_to_gcp_map) -> Optional[str]:
+def billing_row_to_topic(row, dataset_to_gcp_map) -> str | None:
     """Convert a billing row to a dataset"""
     project_id = row['project']['id']
     topic = dataset_to_gcp_map.get(project_id, project_id)
+
+    # Default topic, any cost not clearly associated with a project will be considered
+    # overhead administrative costs. This category should be minimal
     if not topic:
-        return 'admin'
+        return DEFAULT_TOPIC
 
     topic = RE_matcher.sub('', topic)
     return topic
 
 
 def insert_new_rows_in_table(
-    table: str, obj: List[Dict[str, Any]], dry_run: bool
+    table: str, obj: list[dict[str, Any]], dry_run: bool
 ) -> int:
     """Insert JSON rows into a BQ table"""
 
@@ -442,11 +436,12 @@ def insert_dataframe_rows_in_table(table: str, df: pd.DataFrame):
     """Insert new rows from dataframe into a table"""
 
     _query = f"""
-        SELECT id FROM `{table}`
+        SELECT id FROM @table
         WHERE id IN UNNEST(@ids);
     """
     job_config = bq.QueryJobConfig(
         query_parameters=[
+            bq.ArrayQueryParameter('table', 'STRING', table),
             bq.ArrayQueryParameter('ids', 'STRING', list(set(df['id']))),
         ]
     )
@@ -468,13 +463,14 @@ def insert_dataframe_rows_in_table(table: str, df: pd.DataFrame):
         project_id=project_id,
         table_schema=table_schema,
         if_exists='append',
+        chunksize=5000,
     )
 
     logger.info(f'{adding_rows} new rows inserted')
     return adding_rows
 
 
-CACHED_CURRENCY_CONVERSION: Dict[str, float] = {}
+CACHED_CURRENCY_CONVERSION: dict[str, float] = {}
 
 
 def get_currency_conversion_rate_for_time(time: datetime):
@@ -584,7 +580,7 @@ def get_unit_for_batch_resource_type(batch_resource_type: str) -> str:
 
 def get_start_and_end_from_request(
     request,
-) -> Tuple[Optional[datetime], Optional[datetime]]:
+) -> tuple(datetime | None, datetime | None):
     """
     Get the start and end times from the cloud function request.
     """
@@ -597,10 +593,20 @@ def date_range_iterator(
     start,
     end,
     intv=DEFAULT_RANGE_INTERVAL,
-) -> Iterator[Tuple[datetime, datetime]]:
+) -> Iterator[tuple[datetime, datetime]]:
     """
     Iterate over a range of dates.
-    """
+
+    >>> list(date_range_iterator(datetime(2019, 1, 1), datetime(2019, 1, 2)))
+    [(datetime.datetime(2019, 1, 1, 0, 0), datetime.datetime(2019, 1, 2, 0, 0))]
+
+    >>> list(date_range_iterator(datetime(2019, 1, 1), datetime(2019, 1, 3)))
+    [(datetime.datetime(2019, 1, 1, 0, 0), datetime.datetime(2019, 1, 2, 0, 0))]
+
+    >>> list(date_range_iterator(datetime(2019, 1, 1), datetime(2019, 1, 4)))
+    [(datetime.datetime(2019, 1, 1, 0, 0), datetime.datetime(2019, 1, 2, 0, 0)), (datetime.datetime(2019, 1, 2, 0, 0), datetime(2019, 1, 4, 0, 0))]
+
+    """  # noqa: E501
     dt_from = start
     dt_to = start + intv
     while dt_to < end:
@@ -613,7 +619,7 @@ def date_range_iterator(
         yield (dt_from, end)
 
 
-def get_start_and_end_from_data(data) -> Tuple[Optional[datetime], Optional[datetime]]:
+def get_start_and_end_from_data(data) -> tuple(datetime | None, datetime | None):
     """
     Get the start and end times from the cloud function data.
     """
@@ -642,13 +648,13 @@ def get_start_and_end_from_data(data) -> Tuple[Optional[datetime], Optional[date
     return (None, None)
 
 
-def process_default_start_and_end(start, end) -> Tuple[datetime, datetime]:
+def process_default_start_and_end(start, end) -> tuple[datetime, datetime]:
     """
     Process the start and end times.
     """
     if not end:
         # start of today
-        end = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        end = datetime.now()
 
     if not start:
         start = end - DEFAULT_RANGE_INTERVAL
@@ -659,13 +665,13 @@ def process_default_start_and_end(start, end) -> Tuple[datetime, datetime]:
 
 def get_date_intervals_for(
     start, end, interval=DEFAULT_RANGE_INTERVAL
-) -> Iterator[Tuple[datetime, datetime]]:
+) -> Iterator[tuple[datetime, datetime]]:
     """Process start and end times (and get defaults)"""
     s, e = process_default_start_and_end(start, end)
     return date_range_iterator(s, e, intv=interval)
 
 
-def read_secret(project_id: str, secret_name: str) -> Optional[str]:
+def read_secret(project_id: str, secret_name: str) -> str | None:
     """Reads the latest version of a GCP Secret Manager secret.
 
     Returns None if the secret doesn't exist."""
@@ -679,7 +685,7 @@ def read_secret(project_id: str, secret_name: str) -> Optional[str]:
     return response.payload.data.decode('UTF-8')
 
 
-def get_entry(
+def get_hail_entry(
     key: str,
     topic: str,
     service_id: str,
@@ -690,8 +696,8 @@ def get_entry(
     batch_resource: str,
     start_time: datetime,
     end_time: datetime,
-    labels: Dict[str, str] = None,
-) -> Dict[str, Any]:
+    labels: dict[str, str] = None,
+) -> dict[str, Any]:
     """
     Get well formed entry dictionary from keys
     """

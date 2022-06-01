@@ -21,6 +21,8 @@ import logging
 from datetime import datetime
 from typing import Dict, Optional
 
+import google.cloud.bigquery as bq
+
 try:
     from . import utils
 except ImportError:
@@ -57,11 +59,21 @@ def migrate_billing_data(start, end, dataset_to_gcp_map) -> int:
 
     _query = f"""
         SELECT * FROM `{utils.GCP_BILLING_BQ_TABLE}`
-        WHERE export_time >= '{start.isoformat()}'
-            AND export_time <= '{end.isoformat()}'
+        WHERE export_time >= @start
+            AND export_time <= @end
     """
+    job_config = bq.QueryJobConfig(
+        query_parameters=[
+            bq.ScalarQueryParameter('start', 'STRING', str(start)),
+            bq.ScalarQueryParameter('end', 'STRING', str(end)),
+        ]
+    )
 
-    migrate_rows = utils.bigquery_client.query(_query).result().to_dataframe()
+    migrate_rows = (
+        utils.bigquery_client.query(_query, job_config=job_config)
+        .result()
+        .to_dataframe()
+    )
 
     if len(migrate_rows) == 0:
         logging.info(f'No rows to migrate')
@@ -86,14 +98,11 @@ def main(start: datetime = None, end: datetime = None) -> int:
     # Get the dataset to GCP project map
     dataset_to_gcp_map = get_dataset_to_gcp_map()
 
-    # specific hail topic :)
-    dataset_to_gcp_map['hail-295901'] = 'hail'
-
     # Migrate the data in batches
     result = 0
-    for s, f in interval_iterator:
-        logging.info(f'Migrating data from {s} to {f}')
-        result += migrate_billing_data(s, f, dataset_to_gcp_map)
+    for itrvl_start, itrvl_end in interval_iterator:
+        logging.info(f'Migrating data from {itrvl_start} to {itrvl_end}')
+        result += migrate_billing_data(itrvl_start, itrvl_end, dataset_to_gcp_map)
 
     logging.info(f'Migrated a total of {result} rows')
 
