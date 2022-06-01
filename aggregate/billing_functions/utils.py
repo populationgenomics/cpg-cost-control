@@ -2,9 +2,9 @@
 """
 Class of helper functions for billing aggregate functions
 """
-import asyncio
 import os
 import re
+import math
 import json
 import logging
 from pathlib import Path
@@ -12,8 +12,10 @@ from io import StringIO
 from copy import deepcopy
 from collections import defaultdict
 from datetime import datetime, timedelta
+import sys
 from typing import Any, Iterator, Sequence, TypeVar
 
+import asyncio
 import aiohttp
 import pandas as pd
 import google.cloud.bigquery as bq
@@ -44,6 +46,7 @@ IS_PRODUCTION = os.getenv('PRODUCTION') in ('1', 'true', 'yes')
 
 # 10% overhead
 HAIL_SERVICE_FEE = 0.05
+DEFAULT_BQ_CHUNK_SIZE = 9000
 ANALYSIS_RUNNER_PROJECT_ID = 'analysis-runner'
 DEFAULT_RANGE_INTERVAL = timedelta(days=2)
 
@@ -93,7 +96,7 @@ T = TypeVar('T')
 
 async def async_retry_transient_get_json_request(
     url,
-    errors: Exception | tuple(Exception, ...),
+    errors: Exception | tuple[Exception, ...],
     *args,
     attempts=5,
     session=None,
@@ -136,7 +139,7 @@ def chunk(iterable: Sequence[T], chunk_size) -> Iterator[Sequence[T]]:
         yield iterable[i : i + chunk_size]
 
 
-def get_bq_schema_json():
+def get_bq_schema_json() -> dict[str, any]:
     """Get the schema for the table"""
     pwd = Path(__file__).parent.parent.resolve()
     schema_path = pwd / 'schema' / 'aggregate_schema.json'
@@ -178,7 +181,7 @@ def to_bq_time(time: datetime):
     return time.strftime('%Y-%m-%d %H:%M:%S')
 
 
-def get_hail_token():
+def get_hail_token() -> str:
     """
     Get Hail token from local tokens file
     TODO: look at env var for deploy
@@ -197,7 +200,7 @@ def get_credits(
     topic: str = 'hail',
     project: dict = None,
     description: str = None,
-) -> list(dict(str, Any)):
+) -> list[dict[str, any]]:
     """
     Get a hail/seqr credit for each entry
     """
@@ -226,7 +229,7 @@ async def get_batches(
     token: str,
     billing_project: str | None = None,
     last_batch_id: Any | None = None,
-):
+) -> dict[str, any]:
     """
     Get list of batches for a billing project with no filtering.
     (Optional): from last_batch_id
@@ -259,7 +262,7 @@ async def get_finished_batches_for_date(
     end: datetime,
     token: str,
     billing_project: str | None = None,
-):
+) -> list[dict[str, any]]:
     """
     Get all the batches that started on {date} and are complete.
     We assume that batches are ordered by start time, so we can stop
@@ -346,6 +349,68 @@ async def get_jobs_for_batch(batch_id, token: str) -> list[str]:
     return jobs
 
 
+async def migrate_entries_from_hail_in_chunks(
+    start: datetime,
+    end: datetime,
+    func_get_finalised_entries_for_batch,
+    billing_project: str = None,
+    entry_chunk_size=500,
+    batch_group_chunk_size=30,
+    log_prefix: str = '',
+    dry_run=False,
+) -> int:
+    """
+    Migrate all the seqr entries from hail batch,
+    and insert them into the aggregate table.
+
+    Break them down by dataset, and then proportion the rest of the costs.
+    """
+    token = get_hail_token()
+    result = 0
+    lp = f'{log_prefix} ::' if log_prefix else ''
+
+    batches = await get_finished_batches_for_date(
+        start=start, end=end, token=token, billing_project=billing_project
+    )
+    if len(batches) == 0:
+        return 0
+
+    # we'll process 500 batches, and insert all entries for that
+    chnk_counter = 0
+    nchnks = math.ceil(len(batches) / entry_chunk_size) * batch_group_chunk_size
+    jobs_in_batch = []
+    for btch_grp in chunk(batches, entry_chunk_size):
+        jobs_in_batch = []
+        entries = []
+
+        for batch_group_group in chunk(btch_grp, batch_group_chunk_size):
+            chnk_counter += 1
+            times = [b['time_created'] for b in batch_group_group]
+            min_batch = min(times)
+            max_batch = max(times)
+
+            if len(batches) > 100:
+                logger.info(
+                    f'{lp}Getting jobs for batch chunk {chnk_counter}/{nchnks} '
+                    f'[{min_batch}, {max_batch}]'
+                )
+
+            promises = [get_jobs_for_batch(b['id'], token) for b in batch_group_group]
+            jobs_in_batch.extend(await asyncio.gather(*promises))
+
+        # insert all entries for this batch
+        for batch, jobs in zip(btch_grp, jobs_in_batch):
+            batch['jobs'] = jobs
+
+            entries.extend(func_get_finalised_entries_for_batch(batch))
+
+        result += insert_new_rows_in_table(
+            table=GCP_AGGREGATE_DEST_TABLE, objs=entries, dry_run=dry_run
+        )
+
+    return result
+
+
 RE_matcher = re.compile(r'-\d+$')
 
 
@@ -364,72 +429,96 @@ def billing_row_to_topic(row, dataset_to_gcp_map) -> str | None:
 
 
 def insert_new_rows_in_table(
-    table: str, obj: list[dict[str, Any]], dry_run: bool
+    table: str,
+    objs: list[dict[str, Any]],
+    dry_run: bool,
+    chunk_size=DEFAULT_BQ_CHUNK_SIZE,
 ) -> int:
     """Insert JSON rows into a BQ table"""
 
-    if not obj:
+    if not objs:
         logger.info('Not inserting any rows')
         return 0
 
-    _query = f"""
-        SELECT id FROM `{table}`
-        WHERE id IN UNNEST(@ids);
-    """
+    n_chunks = math.ceil(len(objs) / chunk_size)
+    total_size_mb = sys.getsizeof(objs) / (1024 * 1024)
+    if total_size_mb > 10:
+        # bigger than 10MB
+        if (total_size_mb / n_chunks) > 6:
+            chunk_size = math.floor(total_size_mb / 6)
+            logger.info(
+                'The size of the objects to insert into BQ is very large, '
+                f'adjusting the chunk size to {chunk_size}'
+            )
 
-    ids = set(o['id'] for o in obj)
-    if len(ids) != len(obj):
-        counter = defaultdict(int)
-        for o in obj:
-            counter[o['id']] += 1
-        duplicates = [f'{k} ({v})' for k, v in counter.items() if v > 1]
-        raise ValueError(
-            'There are multiple rows with the same id: ' + ', '.join(duplicates)
+    if n_chunks > 1:
+        logger.info(f'Will insert rows in {n_chunks} chunks')
+
+    inserts = 0
+
+    for chunked_objs in chunk(objs, chunk_size):
+
+        _query = f"""
+            SELECT id FROM `{table}`
+            WHERE id IN UNNEST(@ids);
+        """
+
+        ids = set(o['id'] for o in chunked_objs)
+        if len(ids) != len(chunked_objs):
+            counter = defaultdict(int)
+            for o in chunked_objs:
+                counter[o['id']] += 1
+            duplicates = [f'{k} ({v})' for k, v in counter.items() if v > 1]
+            raise ValueError(
+                'There are multiple rows with the same id: ' + ', '.join(duplicates)
+            )
+
+        job_config = bq.QueryJobConfig(
+            query_parameters=[
+                bq.ArrayQueryParameter('ids', 'STRING', list(ids)),
+            ]
         )
 
-    job_config = bq.QueryJobConfig(
-        query_parameters=[
-            bq.ArrayQueryParameter('ids', 'STRING', list(ids)),
-        ]
-    )
+        result = bigquery_client.query(_query, job_config=job_config).result()
+        existing_ids = set(result.to_dataframe()['id'])
 
-    result = bigquery_client.query(_query, job_config=job_config).result()
-    existing_ids = set(result.to_dataframe()['id'])
+        # Filter out any rows that are already in the table
+        filtered_obj = [o for o in chunked_objs if o['id'] not in existing_ids]
 
-    # Filter out any rows that are already in the table
-    filtered_obj = [o for o in obj if o['id'] not in existing_ids]
+        nrows = len(filtered_obj)
 
-    nrows = len(filtered_obj)
+        if nrows == 0:
+            logger.info(f'Not inserting any rows (0/{len(chunked_objs)})')
+            continue
 
-    if nrows == 0:
-        logger.info(f'Not inserting any rows (0/{len(obj)})')
-        return 0
+        if dry_run:
+            logger.info(f'DRY_RUN: Inserting {nrows}/{len(chunked_objs)} rows')
+            inserts += nrows
+            continue
 
-    if dry_run:
-        logger.info(f'DRY_RUN: Inserting {nrows}/{len(obj)} rows')
-        return nrows
+        # Count number of rows adding
+        logger.info(f'Inserting {nrows}/{len(chunked_objs)} rows')
 
-    # Count number of rows adding
-    logger.info(f'Inserting {nrows}/{len(obj)} rows')
+        # Insert the new rows
+        job_config = bq.LoadJobConfig()
+        job_config.source_format = bq.SourceFormat.NEWLINE_DELIMITED_JSON
+        job_config.schema = get_formatted_bq_schema()
 
-    # Insert the new rows
-    job_config = bq.LoadJobConfig()
-    job_config.source_format = bq.SourceFormat.NEWLINE_DELIMITED_JSON
-    job_config.schema = get_formatted_bq_schema()
+        j = '\n'.join(json.dumps(o) for o in filtered_obj)
 
-    j = '\n'.join(json.dumps(o) for o in filtered_obj)
+        resp = bigquery_client.load_table_from_file(
+            StringIO(j), table, job_config=job_config
+        )
+        try:
+            result = resp.result()
+            logger.info(f'Inserted {result.output_rows}/{nrows} rows')
+        except ClientError as e:
+            logger.error(resp.errors)
+            raise e
 
-    resp = bigquery_client.load_table_from_file(
-        StringIO(j), table, job_config=job_config
-    )
-    try:
-        result = resp.result()
-        logger.info(f'Inserted {result.output_rows}/{nrows} rows')
-    except ClientError as e:
-        logger.error(resp.errors)
-        raise e
+        inserts += nrows
 
-    return nrows
+    return inserts
 
 
 def insert_dataframe_rows_in_table(table: str, df: pd.DataFrame):
@@ -463,7 +552,7 @@ def insert_dataframe_rows_in_table(table: str, df: pd.DataFrame):
         project_id=project_id,
         table_schema=table_schema,
         if_exists='append',
-        chunksize=5000,
+        chunksize=DEFAULT_BQ_CHUNK_SIZE,
     )
 
     logger.info(f'{adding_rows} new rows inserted')
@@ -580,7 +669,7 @@ def get_unit_for_batch_resource_type(batch_resource_type: str) -> str:
 
 def get_start_and_end_from_request(
     request,
-) -> tuple(datetime | None, datetime | None):
+) -> tuple[datetime | None, datetime | None]:
     """
     Get the start and end times from the cloud function request.
     """
@@ -619,7 +708,7 @@ def date_range_iterator(
         yield (dt_from, end)
 
 
-def get_start_and_end_from_data(data) -> tuple(datetime | None, datetime | None):
+def get_start_and_end_from_data(data) -> tuple[datetime | None, datetime | None]:
     """
     Get the start and end times from the cloud function data.
     """

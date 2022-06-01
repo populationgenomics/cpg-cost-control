@@ -32,14 +32,14 @@ TO DO :
 # write some code here
 
 import json
-import math
+import asyncio
 import hashlib
 from collections import defaultdict
 from copy import deepcopy
 from datetime import datetime, timedelta
-from typing import List, Tuple, Dict, Any
 
-import asyncio
+import yaml
+import requests
 
 import google.cloud.bigquery as bq
 
@@ -48,19 +48,19 @@ from sample_metadata.model.analysis_type import AnalysisType
 from sample_metadata.model.analysis_status import AnalysisStatus
 from sample_metadata.model.analysis_query_model import AnalysisQueryModel
 
-from aggregate.billing_functions.utils import HAIL_PROJECT_FIELD, SEQR_PROJECT_FIELD
-
 try:
     from . import utils
 except ImportError:
     import utils
 
 
-ProportionateMapType = List[Tuple[datetime, Dict[str, float]]]
+# ie: [(datetime, {[dataset]: fractional_breakdown})}
+# eg: [('2022-01-06', {'d1': 0.3, 'd2': 0.5, 'd3': 0.2})]
+ProportionateMapType = list[tuple[datetime, dict[str, float]]]
 
 SERVICE_ID = 'seqr'
 SEQR_HAIL_BILLING_PROJECT = 'seqr'
-
+ES_ANALYSIS_OBJ_INTRO_DATE = datetime(2022, 6, 30)
 
 GCP_BILLING_BQ_TABLE = (
     'billing-admin-290403.billing.gcp_billing_export_v1_01D012_20A6A2_CBD343'
@@ -78,130 +78,9 @@ sapi = SampleApi()
 aapi = AnalysisApi()
 
 
-def get_seqr_datasets():
-    """
-    Get Hail billing projects, same names as dataset
-    TOOD: Implement
-    """
-
-    # response = requests.get(
-    #     'https://raw.githubusercontent.com/populationgenomics/
-    #          analysis-runner/main/stack/Pulumi.seqr.yaml'
-    # )
-    # response.raise_for_status()
-
-    # return response.text()['datasets']
-
-    return [
-        'acute-care',
-        'perth-neuro',
-        # 'rdnow',
-        'heartkids',
-        'ravenscroft-rdstudy',
-        # 'ohmr3-mendelian',
-        # 'ohmr4-epilepsy',
-        # 'flinders-ophthal',
-        'circa',
-        # 'schr-neuro',
-        # 'brain-malf',
-        # 'leukodystrophies',
-        # 'mito-disease',
-        'ravenscroft-arch',
-        'hereditary-neuro',
-    ]
-
-
-def from_request(request):
-    """
-    From request object, get start and end time if present
-    """
-    start, end = utils.get_start_and_end_from_request(request)
-    asyncio.new_event_loop().run_until_complete(main(start, end))
-
-
-def get_ratios_from_date(
-    date: datetime, prop_map: ProportionateMapType
-) -> Dict[str, float]:
-    """
-    Get ratios for a date
-    """
-    assert isinstance(date, datetime)
-    for dt, m in prop_map[::-1]:
-        # first entry BEFORE the date
-        if dt <= date:
-            return m
-
-    raise AssertionError(f'No ratio found for date {date}')
-
-
-def from_pubsub(data=None, _=None):
-    """
-    From pubsub message, get start and end time if present
-    """
-    start, end = utils.get_start_and_end_from_data(data)
-    asyncio.new_event_loop().run_until_complete(main(start, end))
-
-
-async def migrate_entries_from_hail_batch(
-    start: datetime, end: datetime, proportion_map: ProportionateMapType, dry_run=False
-) -> int:
-    """
-    Migrate all the seqr entries from hail batch,
-    and insert them into the aggregate table.
-
-    Break them down by dataset, and then proportion the rest of the costs.
-    """
-    token = utils.get_hail_token()
-    result = 0
-
-    batches = await utils.get_finished_batches_for_date(
-        start=start, end=end, token=token, billing_project=SEQR_HAIL_BILLING_PROJECT
-    )
-    if len(batches) == 0:
-        return 0
-
-    # we'll process 500 batches, and insert all entries for that
-    chnk_counter = 0
-    final_chnk_size = 30
-    nchnks = math.ceil(len(batches) / 500) * final_chnk_size
-    jobs_in_batch = []
-    for btch_grp in utils.chunk(batches, 500):
-        jobs_in_batch = []
-        entries = []
-
-        for batch_group_group in utils.chunk(btch_grp, final_chnk_size):
-            chnk_counter += 1
-            times = [b['time_created'] for b in batch_group_group]
-            min_batch = min(times)
-            max_batch = max(times)
-
-            if len(batches) > 100:
-                logger.info(
-                    f'seqr :: Getting jobs for batch chunk {chnk_counter}/{nchnks} '
-                    f'[{min_batch}, {max_batch}]'
-                )
-
-            promises = [
-                utils.get_jobs_for_batch(b['id'], token) for b in batch_group_group
-            ]
-            jobs_in_batch.extend(await asyncio.gather(*promises))
-
-        # insert all entries for this batch
-        for batch, jobs in zip(btch_grp, jobs_in_batch):
-            batch['jobs'] = jobs
-
-            entries.extend(get_finalised_entries_for_batch(batch, proportion_map))
-
-        result += utils.insert_new_rows_in_table(
-            table=utils.GCP_AGGREGATE_DEST_TABLE, obj=entries, dry_run=dry_run
-        )
-
-    return result
-
-
 def get_finalised_entries_for_batch(
     batch, proportion_map: ProportionateMapType
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, any]]:
     """
     Get finalised entries for a batch
     """
@@ -215,8 +94,8 @@ def get_finalised_entries_for_batch(
 
     currency_conversion_rate = utils.get_currency_conversion_rate_for_time(start_time)
 
-    jobs_with_no_dataset: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
-    entries: List[Dict[str, Any]] = []
+    jobs_with_no_dataset: list[tuple[dict[str, any], dict[str, any]]] = []
+    entries: list[dict[str, any]] = []
 
     for job in batch['jobs']:
         dataset = job['attributes'].get('dataset', '').replace('-test', '')
@@ -224,72 +103,38 @@ def get_finalised_entries_for_batch(
             jobs_with_no_dataset.append(job)
             continue
 
-        sample = job['attributes'].get('sample')
-        job_name = job['attributes'].get('name')
-
-        hail_ui_url = utils.HAIL_UI_URL.replace('{batch_id}', str(batch_id))
-
-        labels = {
-            'dataset': dataset,
-            'job_name': job_name,
-            'batch_name': batch_name,
-            'batch_id': str(batch_id),
-            'job_id': job['job_id'],
-        }
-        if sample:
-            labels['sample'] = sample
-
-        resources = job['resources']
-        if not resources:
-            resources = {}
-
-        for batch_resource, usage in resources.items():
-            if batch_resource.startswith('service-fee'):
-                continue
-
-            labels['batch_resource'] = batch_resource
-            labels['url'] = hail_ui_url
-
-            cost = currency_conversion_rate * utils.get_usd_cost_for_resource(
-                batch_resource, usage
+        entries.extend(
+            get_finalised_entries_for_dataset_batch_and_job(
+                dataset=dataset,
+                batch_id=batch_id,
+                batch_name=batch_name,
+                batch_start_time=start_time,
+                batch_end_time=end_time,
+                job=job,
+                currency_conversion_rate=currency_conversion_rate,
             )
+        )
 
-            entries.append(
-                utils.get_hail_entry(
-                    key=get_key_from_batch_job(dataset, batch, job, batch_resource),
-                    topic=dataset,
-                    service_id=SERVICE_ID,
-                    description='Seqr compute',
-                    cost=cost,
-                    currency_conversion_rate=currency_conversion_rate,
-                    usage=usage,
-                    batch_resource=batch_resource,
-                    start_time=start_time,
-                    end_time=end_time,
-                    labels=labels,
-                )
-            )
-
-    extra_job_resources = defaultdict(int)
+    # Now go through each job within the batch withOUT a dataset
+    # and proportion a fraction of them to each relevant dataset.
     for job in jobs_with_no_dataset:
+
         job_id = job['job_id']
+        if not job['resources']:
+            continue
+
         for batch_resource, usage in job['resources'].items():
             if batch_resource.startswith('service-fee'):
                 continue
 
-            extra_job_resources[batch_resource] += usage
-
-        for batch_resource, usage in extra_job_resources.items():
-
-            batch_id = batch['id']
             hail_ui_url = utils.HAIL_UI_URL.replace('{batch_id}', str(batch_id))
 
             labels = {
                 'batch_name': batch_name,
                 'batch_id': str(batch_id),
+                'batch_resource': batch_resource,
+                'url': hail_ui_url,
             }
-            labels['batch_resource'] = batch_resource
-            labels['url'] = hail_ui_url
 
             gross_cost = currency_conversion_rate * utils.get_usd_cost_for_resource(
                 batch_resource, usage
@@ -297,26 +142,25 @@ def get_finalised_entries_for_batch(
 
             for dataset, fraction in prop_map.items():
                 # Distribute the remaining cost across all datasets proportionately
-                cost = gross_cost * fraction
-
+                key = '-'.join(
+                    (
+                        SERVICE_ID,
+                        'distributed',
+                        dataset,
+                        'batch',
+                        str(batch_id),
+                        'job',
+                        str(job_id),
+                        batch_resource,
+                    )
+                )
                 entries.append(
                     utils.get_hail_entry(
-                        key='-'.join(
-                            [
-                                SERVICE_ID,
-                                'distributed',
-                                dataset,
-                                batch_resource,
-                                'batch',
-                                str(batch_id),
-                                'job',
-                                str(job_id),
-                            ]
-                        ),
+                        key=key,
                         topic=dataset,
                         service_id=SERVICE_ID,
                         description='Seqr compute (distributed)',
-                        cost=cost,
+                        cost=gross_cost * fraction,
                         currency_conversion_rate=currency_conversion_rate,
                         usage=round(usage * fraction),
                         batch_resource=batch_resource,
@@ -330,149 +174,241 @@ def get_finalised_entries_for_batch(
                     )
                 )
 
-    entries.extend(utils.get_credits(entries, topic='hail', project=HAIL_PROJECT_FIELD))
+    entries.extend(
+        utils.get_credits(entries, topic='hail', project=utils.HAIL_PROJECT_FIELD)
+    )
+
+    return entries
+
+
+def get_finalised_entries_for_dataset_batch_and_job(
+    dataset: str,
+    batch_id: int,
+    batch_name: str,
+    batch_start_time: datetime,
+    batch_end_time: datetime,
+    job: dict[str, any],
+    currency_conversion_rate: float,
+):
+    """
+    Get the list of entries for a dataset attributed job
+
+    """
+    entries = []
+
+    job_id = job['job_id']
+    job_name = job['attributes'].get('name')
+    sample = job['attributes'].get('sample')
+
+    hail_ui_url = utils.HAIL_UI_URL.replace('{batch_id}', str(batch_id))
+
+    labels = {
+        'dataset': dataset,
+        'job_name': job_name,
+        'batch_name': batch_name,
+        'batch_id': str(batch_id),
+        'job_id': str(job_id),
+    }
+    if sample:
+        labels['sample'] = sample
+
+    resources = job['resources']
+    if not resources:
+        return []
+
+    for batch_resource, usage in resources.items():
+        if batch_resource.startswith('service-fee'):
+            continue
+
+        labels['batch_resource'] = batch_resource
+        labels['url'] = hail_ui_url
+
+        cost = currency_conversion_rate * utils.get_usd_cost_for_resource(
+            batch_resource, usage
+        )
+
+        key = '-'.join(
+            (
+                SERVICE_ID,
+                dataset,
+                'batch',
+                str(batch_id),
+                'job',
+                str(job_id),
+                batch_resource,
+            )
+        )
+        entries.append(
+            utils.get_hail_entry(
+                key=key,
+                topic=dataset,
+                service_id=SERVICE_ID,
+                description='Seqr compute',
+                cost=cost,
+                currency_conversion_rate=currency_conversion_rate,
+                usage=usage,
+                batch_resource=batch_resource,
+                start_time=batch_start_time,
+                end_time=batch_end_time,
+                labels=labels,
+            )
+        )
 
     return entries
 
 
 def migrate_entries_from_bq(
-    start, end, prop_map: ProportionateMapType, dry_run=False
+    start: datetime,
+    end: datetime,
+    prop_map: ProportionateMapType,
+    dry_run: bool = False,
 ) -> int:
     """
     Migrate entries from BQ to GCP, using the given proportionate maps
     """
-    # pylint: disable=too-many-branches
-    _query = f"""
-        SELECT * FROM `{GCP_BILLING_BQ_TABLE}`
-        WHERE export_time >= @start
-            AND export_time <= @end
-            AND project.id = @project
-        ORDER BY usage_start_time
-    """
 
-    job_config = bq.QueryJobConfig(
-        query_parameters=[
-            bq.ScalarQueryParameter('start', 'STRING', str(start)),
-            bq.ScalarQueryParameter('end', 'STRING', str(end)),
-            bq.ScalarQueryParameter('project', 'STRING', 'seqr-308602'),
-        ]
-    )
+    logger.debug('Migrating seqr data to BQ')
+    for istart, iend in utils.get_date_intervals_for(start, end):
+        logger.info(
+            f'Migrating seqr BQ data [{istart.isoformat()}, {iend.isoformat()}]'
+        )
+        # pylint: disable=too-many-branches
+        _query = f"""
+            SELECT * FROM `{GCP_BILLING_BQ_TABLE}`
+            WHERE export_time >= @start
+                AND export_time <= @end
+                AND project.id = @project
+            ORDER BY usage_start_time
+        """
 
-    df = (
-        utils.bigquery_client.query(_query, job_config=job_config)
-        .result()
-        .to_dataframe()
-    )
-    json_obj = json.loads(df.to_json(orient='records'))
+        job_config = bq.QueryJobConfig(
+            query_parameters=[
+                bq.ScalarQueryParameter('start', 'STRING', str(istart)),
+                bq.ScalarQueryParameter('end', 'STRING', str(iend)),
+                bq.ScalarQueryParameter('project', 'STRING', 'seqr-308602'),
+            ]
+        )
 
-    entries_by_id = {}
-    result = 0
-    param_map, current_date = None, None
-    for obj in json_obj:
+        df = (
+            utils.bigquery_client.query(_query, job_config=job_config)
+            .result()
+            .to_dataframe()
+        )
+        json_obj = json.loads(df.to_json(orient='records'))
 
-        if obj['cost'] == 0:
-            # come on now
-            continue
-        usage_start_time = datetime.fromtimestamp(int(obj['usage_start_time'] / 1000))
-        del obj['billing_account_id']
-        del obj['project']
-        if current_date is None or usage_start_time > current_date:
-            # use and abuse the
-            param_map = get_ratios_from_date(usage_start_time, prop_map)
+        entries_by_id = {}
+        result = 0
+        param_map, current_date = None, None
+        for obj in json_obj:
 
-        labels = obj['labels']
-
-        for dataset, ratio in param_map.items():
-
-            new_entry = deepcopy(obj)
-
-            new_entry['topic'] = dataset
-            new_entry['service']['id'] = SERVICE_ID
-            new_entry['labels'] = [*labels, {'key': 'proportion', 'value': ratio}]
-            new_entry['cost'] *= ratio
-
-            dates = ['usage_start_time', 'usage_end_time', 'export_time']
-            for k in dates:
-                new_entry[k] = utils.to_bq_time(
-                    datetime.fromtimestamp(int(obj[k] / 1000))
-                )
-
-            new_entry['id'] = '-'.join(
-                [SERVICE_ID, dataset, billing_row_to_key(new_entry)]
-            )
-
-            if new_entry['id'] in entries_by_id:
-                if new_entry != entries_by_id[new_entry['id']]:
-                    logger.warning(
-                        f'WARNING: duplicate entry {new_entry["id"]} with diff values'
-                    )
+            if obj['cost'] == 0:
+                # come on now
                 continue
-
-            entries_by_id[new_entry['id']] = new_entry
-
-        if len(entries_by_id) > 10000:
-
-            # insert all entries here
-            credit_entries = {
-                e['id']: e
-                for e in utils.get_credits(
-                    entries_by_id.values(), topic='seqr', project=SEQR_PROJECT_FIELD
-                )
-            }
-            entries_by_id.update(credit_entries)
-
-            if len(entries_by_id) != 2 * len(credit_entries):
-                logger.warning('Mismatched length of credits')
-
-            result += utils.insert_new_rows_in_table(
-                table=utils.GCP_AGGREGATE_DEST_TABLE,
-                obj=entries_by_id.values(),
-                dry_run=dry_run,
+            usage_start_time = datetime.fromtimestamp(
+                int(obj['usage_start_time'] / 1000)
             )
-            entries_by_id = {}
+            del obj['billing_account_id']
+            del obj['project']
+            if current_date is None or usage_start_time > current_date:
+                # use and abuse the
+                param_map = get_ratios_from_date(usage_start_time, prop_map)
 
-    if entries_by_id:
-        entries_by_id.update(
-            {
-                e['id']: e
-                for e in utils.get_credits(
-                    entries_by_id.values(), topic='seqr', project=SEQR_PROJECT_FIELD
-                )
-            }
+            labels = obj['labels']
+
+            for dataset, ratio in param_map.items():
+
+                new_entry = deepcopy(obj)
+
+                new_entry['topic'] = dataset
+                new_entry['service']['id'] = SERVICE_ID
+                new_entry['labels'] = [*labels, {'key': 'proportion', 'value': ratio}]
+                new_entry['cost'] *= ratio
+
+                dates = ['usage_start_time', 'usage_end_time', 'export_time']
+                for k in dates:
+                    new_entry[k] = utils.to_bq_time(
+                        datetime.fromtimestamp(int(obj[k] / 1000))
+                    )
+
+                nid = '-'.join([SERVICE_ID, dataset, billing_obj_to_key(new_entry)])
+
+                new_entry['id'] = nid
+                if nid in entries_by_id:
+                    if new_entry != entries_by_id[nid]:
+
+                        logger.warning(
+                            f'WARNING: duplicate entry {nid} with diff values'
+                        )
+                    continue
+
+                entries_by_id[nid] = new_entry
+
+        # insert all entries here
+        entries = list(entries_by_id.values())
+        entries.extend(
+            utils.get_credits(
+                entries_by_id.values(),
+                topic='seqr',
+                project=utils.SEQR_PROJECT_FIELD,
+            )
         )
 
         result += utils.insert_new_rows_in_table(
             table=utils.GCP_AGGREGATE_DEST_TABLE,
-            obj=entries_by_id.values(),
+            objs=entries,
             dry_run=dry_run,
         )
 
     return result
 
 
-def billing_row_to_key(row) -> str:
+def billing_obj_to_key(obj: dict[str, any]) -> str:
     """Convert a billing row to a hash which will be the row key"""
     identifier = hashlib.md5()
-    for k, v in row.items():
+    for k, v in obj.items():
         identifier.update((k + str(v)).encode('utf-8'))
 
     return identifier.hexdigest()
 
 
+# Proportionate map functions
+
+
 async def generate_proportionate_map_of_dataset(
-    start, finish, projects: List[str]
+    start: datetime, end: datetime, projects: list[str]
 ) -> ProportionateMapType:
     """
     Generate a proportionate map of datasets from list of samples
     in the relevant joint-calls (< 2022-06-01) or es-index (>= 2022-06-01)
     """
 
+    # pylint: disable=too-many-locals
+
     # from 2022-06-01, we use it based on es-index, otherwise joint-calling
     relevant_analysis = []
     sm_projects = await papi.get_all_projects_async()
-    project_id_to_name = {p['id']: p['name'] for p in sm_projects}
+    sm_pid_to_dataset = {p['id']: p['dataset'] for p in sm_projects}
 
-    if start < datetime(2022, 6, 1):
+    if end > ES_ANALYSIS_OBJ_INTRO_DATE:
+        es_indices = await aapi.query_analyses_async(
+            AnalysisQueryModel(
+                type=AnalysisType('es-index'),
+                status=AnalysisStatus('completed'),
+                projects=['seqr'],
+            )
+        )
+        relevant_analysis.extend(a for a in es_indices)
+
+    start_es_date = None
+    if relevant_analysis:
+        start_es_date = min(
+            datetime.fromtimestamp(a['timestamp_completed']) for a in relevant_analysis
+        )
+
+    # if there are no ES-indices, or es-indices don't cover the range,
+    # then full in the remainder of the range
+    if not start_es_date or start < start_es_date:
+
         joint_calls = await aapi.query_analyses_async(
             AnalysisQueryModel(
                 type=AnalysisType('joint-calling'),
@@ -481,30 +417,46 @@ async def generate_proportionate_map_of_dataset(
             )
         )
 
-        relevant_analysis.extend(joint_calls)
+        jc_end = start_es_date or end
 
-    elif finish > datetime(2022, 6, 1):
-        es_indices = await aapi.query_analyses_async(
-            AnalysisQueryModel(
-                type=AnalysisType('es-index'),
-                status=AnalysisStatus('completed'),
-                projects=['seqr'],
-            )
+        relevant_analysis.extend(
+            a
+            for a in joint_calls
+            if datetime.fromisoformat(a['timestamp_completed']) <= jc_end
         )
-        relevant_analysis.extend(es_indices)
 
-    assert relevant_analysis
+    relevant_analysis = sorted(
+        relevant_analysis, key=lambda a: a['timestamp_completed']
+    )
+
+    for idx in range(len(relevant_analysis) - 1, -1, -1):
+        if (
+            datetime.fromisoformat(relevant_analysis[idx]['timestamp_completed'])
+            < start
+        ):
+            relevant_analysis = relevant_analysis[idx:]
+            break
 
     all_samples = set(s for a in relevant_analysis for s in a['sample_ids'])
+
+    filtered_projects = list(set(sm_pid_to_dataset.values()).intersection(projects))
+    missing_projects = set(projects) - set(sm_pid_to_dataset.values())
+    if missing_projects:
+        logger.warning(
+            f'The datasets {", ".join(missing_projects)} were not found in SM'
+        )
+
     crams = await aapi.query_analyses_async(
         AnalysisQueryModel(
             sample_ids=list(all_samples),
             type=AnalysisType('cram'),
-            projects=projects,
+            projects=filtered_projects,
             status=AnalysisStatus('completed'),
         )
     )
 
+    # Crams in SM only have one sample_id, so easy to link
+    # the cram back to the specific internal sample ID
     cram_map = {c['sample_ids'][0]: c for c in crams}
 
     missing_samples = set()
@@ -512,7 +464,6 @@ async def generate_proportionate_map_of_dataset(
 
     proportioned_datasets: ProportionateMapType = []
 
-    s = datetime.now()
     for analysis in relevant_analysis:
 
         # Using timestamp_completed as the start time for the propmap
@@ -521,7 +472,7 @@ async def generate_proportionate_map_of_dataset(
         #   joint_call.completed_timestamp > hail_joint_call.started_timestamp
         # We might be able to roughly accept this by subtracting a day from the
         # joint-call, and sort of hope that no joint-call runs over 24 hours.
-        dt = datetime.fromisoformat(analysis['timestamp_completed']) - timedelta(days=1)
+        dt = datetime.fromisoformat(analysis['timestamp_completed']) - timedelta(days=2)
         samples = analysis['sample_ids']
 
         size_per_project = defaultdict(int)
@@ -536,12 +487,13 @@ async def generate_proportionate_map_of_dataset(
             project_id = cram['project']
             size_per_project[project_id] += cram_size
 
+        # Size is in bytes, and plain Python int type is unbound
         total_size = sum(size_per_project.values())
         proportioned_datasets.append(
             (
                 dt,
                 {
-                    project_id_to_name[project_id]: size / total_size
+                    sm_pid_to_dataset[project_id]: size / total_size
                     for project_id, size in size_per_project.items()
                 },
             )
@@ -555,7 +507,48 @@ async def generate_proportionate_map_of_dataset(
             + ', '.join(f'{k} ({v})' for k, v in missing_sizes.items())
         )
 
-    return sorted(proportioned_datasets, key=lambda x: x[0])
+    # We'll sort ASC, which makes it easy to find the relevant entry later
+    return proportioned_datasets
+
+
+def get_ratios_from_date(
+    date: datetime, prop_map: ProportionateMapType
+) -> dict[str, float]:
+    """
+    From the prop_map, get the ratios for the applicable date
+    """
+    assert isinstance(date, datetime)
+
+    # prop_map is sorted ASC by date, so we
+    # can find the latest element that is <= date
+    for dt, m in prop_map[::-1]:
+        # first entry BEFORE the date
+        if dt <= date:
+            return m
+
+    raise AssertionError(f'No ratio found for date {date}')
+
+
+# UTIL specific to seqr billing
+
+
+def get_seqr_datasets() -> list[str]:
+    """
+    Get Hail billing projects, same names as dataset
+    """
+
+    response = requests.get(
+        'https://raw.githubusercontent.com/populationgenomics/'
+        'analysis-runner/main/stack/Pulumi.seqr.yaml'
+    )
+    response.raise_for_status()
+
+    d = yaml.safe_load(response.text)
+    datasets = json.loads(d['config']['datasets:depends_on'])
+    return datasets
+
+
+# DRIVER functions
 
 
 async def main(start: datetime = None, end: datetime = None, dry_run=False):
@@ -566,9 +559,18 @@ async def main(start: datetime = None, end: datetime = None, dry_run=False):
 
     prop_map = await generate_proportionate_map_of_dataset(start, end, projects)
     result = 0
-    # result += migrate_entries_from_bq(start, end, prop_map, dry_run=dry_run)
-    result += await migrate_entries_from_hail_batch(
-        start, end, prop_map, dry_run=dry_run
+
+    result += migrate_entries_from_bq(start, end, prop_map, dry_run=dry_run)
+
+    def func_get_finalised_entries(batch):
+        return get_finalised_entries_for_batch(batch, prop_map)
+
+    result += await utils.migrate_entries_from_hail_in_chunks(
+        start=start,
+        end=end,
+        billing_project=SEQR_HAIL_BILLING_PROJECT,
+        func_get_finalised_entries_for_batch=func_get_finalised_entries,
+        dry_run=dry_run,
     )
 
     if dry_run:
@@ -577,25 +579,24 @@ async def main(start: datetime = None, end: datetime = None, dry_run=False):
         print(f'Inserted {result} entries')
 
 
-def get_key_from_batch_job(dataset, batch, job, batch_resource):
-    """Get unique key for entry from params"""
-    assert dataset is not None
-    sample = job.get('attributes', {}).get('sample')
+def from_request(request):
+    """
+    From request object, get start and end time if present
+    """
+    start, end = utils.get_start_and_end_from_request(request)
+    asyncio.new_event_loop().run_until_complete(main(start, end))
 
-    key_components = [SERVICE_ID]
-    if dataset:
-        key_components.append(dataset)
-        if sample:
-            key_components.append(sample)
 
-    key_components.extend(['batch', str(batch['id']), 'job', str(job['job_id'])])
-    key_components.append(batch_resource)
-
-    return '-'.join(key_components)
+def from_pubsub(data=None, _=None):
+    """
+    From pubsub message, get start and end time if present
+    """
+    start, end = utils.get_start_and_end_from_data(data)
+    asyncio.new_event_loop().run_until_complete(main(start, end))
 
 
 if __name__ == '__main__':
-    test_start, test_end = None, None
+    test_start, test_end = datetime(2022, 5, 25), None
     # test_start, test_end = datetime(2022, 5, 2), datetime(2022, 5, 5)
 
     asyncio.new_event_loop().run_until_complete(
