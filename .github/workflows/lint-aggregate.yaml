@@ -25,3 +25,6 @@ jobs:
 
       - name: pre-commit
         run: pre-commit run --all-files
+
+      - name: "Run doctests"
+        run: pytest --doctest-modules
