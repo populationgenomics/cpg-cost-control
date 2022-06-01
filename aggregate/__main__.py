@@ -252,14 +252,14 @@ def create_cloud_function(
 
 def archive_folder(path: str) -> pulumi.AssetArchive:
     assets = {}
+    allowed_extensions = ['.py', '.txt']
     for file in os.listdir(path):
         location = os.path.join(path, file)
         if os.path.isdir(location) and not location.startswith('__'):
-            asset = pulumi.FileArchive(location)
-        elif location.endswith('.py') or location.endswith('.txt'):
-            asset = pulumi.FileAsset(path=location)
-
-        assets[file] = asset
+            assets[file] = pulumi.FileArchive(location)
+        elif any(location.endswith(ext) for ext in allowed_extensions):
+            assets[file] = pulumi.FileAsset(path=location)
+        # skip any other files,
 
     return pulumi.AssetArchive(assets)
 
