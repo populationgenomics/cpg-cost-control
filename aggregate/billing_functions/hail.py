@@ -4,35 +4,23 @@ A cloud function that synchronises HAIL billing data to BigQuery
 
 TO:     billing-admin-290403.billing_aggregate.aggregate
 
-
 Notes:
 
 - The service.id should be 'hail'
-
 
 Tasks:
 
 - Only want to transfer data from the projects in the server-config
 - Need to build an endpoint in Hail to service this metadata
     - Take in a project and a date range in the endpoint
-    - Result should be of a form like this
-        [{
-            batch_id: 0,
-            jobs: [{'job_id': 0, 'mseccpu': 100, 'msecgb': 100}]
-        }]
-
-    - Should be able to filter on the following properties:
-        - search by attribute
-        - search by project
 - Transform into new generic format
-    - One batch per row
+    - One entry per resource type per batch
 
 - Can't duplicate rows, so determine some ID:
-    - And maybe only sync 'settled' jobs within datetimes
+    - Only sync 'settled' jobs within datetimes
         (ie: finished between START + END of previous time period)
 """
 import json
-import logging
 import asyncio
 from collections import defaultdict
 from datetime import datetime
@@ -47,7 +35,7 @@ except ImportError:
 
 
 SERVICE_ID = 'hail'
-EXCLUDED_BATCH_IDS = {'seqr'}
+EXCLUDED_BATCH_PROJECTS = {'seqr'}
 
 
 logger = utils.logger
@@ -76,16 +64,14 @@ def get_finalised_entries_for_batch(batch: dict) -> List[Dict]:
     start_time = utils.parse_hail_time(batch['time_created'])
     end_time = utils.parse_hail_time(batch['time_completed'])
     batch_id = batch['id']
-    resource_usage = defaultdict(float)
     dataset = batch['billing_project']
-
     currency_conversion_rate = utils.get_currency_conversion_rate_for_time(start_time)
+
+    resource_usage = defaultdict(float)
     for job in batch['jobs']:
         if not job['resources']:
             continue
         for batch_resource, usage in job['resources'].items():
-            # batch_resource is one of ['cpu', 'memory', 'disk']
-
             resource_usage[batch_resource] += usage
 
     for batch_resource, usage in resource_usage.items():
@@ -163,7 +149,7 @@ async def main(
         dry_run=dry_run,
     )
 
-    logging.info(f'Migrated a total of {result} rows')
+    logger.info(f'Migrated a total of {result} rows')
 
     return result
 

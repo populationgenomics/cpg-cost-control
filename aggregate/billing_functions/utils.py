@@ -23,10 +23,13 @@ import google.cloud.bigquery as bq
 from google.cloud import secretmanager
 from google.api_core.exceptions import ClientError
 
-logging.basicConfig(level=logging.INFO)
 
-# fix this later to be a proper configured logger
-logger = logging
+logger = logging.getLogger('Cost Aggregate')
+if os.getenv('DEV') in ('1', 'true', 'yes'):
+    logger.setLevel(logging.DEBUG)
+else:
+    logger.setLevel(logging.INFO)
+
 
 DEFAULT_TOPIC = 'admin'
 
@@ -241,6 +244,7 @@ async def get_batches(
         qparams['billing_project'] = billing_project
     else:
         params = ['q=']
+
     params.extend(f'q={k}:{v}' for k, v in qparams.items())
     if last_batch_id:
         params.append(f'last_batch_id={last_batch_id}')
@@ -311,7 +315,7 @@ async def get_finished_batches_for_date(
                 skipped += 1
 
 
-async def get_jobs_for_batch(batch_id, token: str) -> list[str]:
+async def get_jobs_for_batch(batch_id, token: str) -> list[dict[str, any]]:
     """
     For a single batch, fill in the 'jobs' field.
     """
@@ -375,14 +379,17 @@ async def migrate_entries_from_hail_in_chunks(
     if len(batches) == 0:
         return 0
 
-    # we'll process 500 batches, and insert all entries for that
     chnk_counter = 0
     nchnks = math.ceil(len(batches) / entry_chunk_size) * batch_group_chunk_size
     jobs_in_batch = []
+
+    # Process chunks of batches to avoid loading too many entries into memory
     for btch_grp in chunk(batches, entry_chunk_size):
         jobs_in_batch = []
         entries = []
 
+        # Get jobs for a fraction of each chunked batches
+        # to avoid hitting hail batch too much
         for batch_group_group in chunk(btch_grp, batch_group_chunk_size):
             chnk_counter += 1
             times = [b['time_created'] for b in batch_group_group]
@@ -390,7 +397,7 @@ async def migrate_entries_from_hail_in_chunks(
             max_batch = max(times)
 
             if len(batches) > 100:
-                logger.info(
+                logger.debug(
                     f'{lp}Getting jobs for batch chunk {chnk_counter}/{nchnks} '
                     f'[{min_batch}, {max_batch}]'
                 )
@@ -598,6 +605,10 @@ def _generate_hail_resource_cost_lookup():
         rate_instance_hour_to_fraction_msec,
     )
 
+    # Noting that this does not support different prices over time
+    # consider implementing something like:
+    #   https://github.com/hail-is/hail/pull/11840/files
+
     rates = [
         # https://cloud.google.com/compute/vm-instance-pricing#:~:text=N1%20custom%20vCPUs,that%20machine%20type.
         ('compute/n1-preemptible/1', rate_cpu_hour_to_mcpu_msec(0.00898)),
@@ -641,6 +652,9 @@ def get_usd_cost_for_resource(batch_resource, usage, region='australia-southeast
     """
     Get the cost of a resource in USD.
     """
+    # TODO: consider extending this to support azure,
+    # maybe it's just a different region tag
+
     regions = {
         'australia-southeast-1': AUSTRALIA_SOUTHEAST_1_COST,
     }
@@ -690,10 +704,10 @@ def date_range_iterator(
     [(datetime.datetime(2019, 1, 1, 0, 0), datetime.datetime(2019, 1, 2, 0, 0))]
 
     >>> list(date_range_iterator(datetime(2019, 1, 1), datetime(2019, 1, 3)))
-    [(datetime.datetime(2019, 1, 1, 0, 0), datetime.datetime(2019, 1, 2, 0, 0))]
+    [(datetime.datetime(2019, 1, 1, 0, 0), datetime.datetime(2019, 1, 3, 0, 0))]
 
     >>> list(date_range_iterator(datetime(2019, 1, 1), datetime(2019, 1, 4)))
-    [(datetime.datetime(2019, 1, 1, 0, 0), datetime.datetime(2019, 1, 2, 0, 0)), (datetime.datetime(2019, 1, 2, 0, 0), datetime(2019, 1, 4, 0, 0))]
+    [(datetime.datetime(2019, 1, 1, 0, 0), datetime.datetime(2019, 1, 3, 0, 0)), (datetime.datetime(2019, 1, 3, 0, 0), datetime.datetime(2019, 1, 4, 0, 0))]
 
     """  # noqa: E501
     dt_from = start
@@ -793,14 +807,12 @@ def get_hail_entry(
 
     assert labels is None or isinstance(labels, dict)
 
-    _labels = (
-        [
+    _labels = []
+    if labels:
+        _labels = [
             {'key': k, 'value': str(v).encode('ascii', 'ignore').decode()}
             for k, v in labels.items()
         ]
-        if labels
-        else []
-    )
     return {
         'id': key,
         'topic': topic,

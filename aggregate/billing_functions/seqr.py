@@ -82,7 +82,8 @@ def get_finalised_entries_for_batch(
     batch, proportion_map: ProportionateMapType
 ) -> list[dict[str, any]]:
     """
-    Get finalised entries for a batch
+    Take a batch dictionary, and the full proportion map
+    and return a list of entries for the Hail batch.
     """
 
     batch_id = batch['id']
@@ -90,7 +91,7 @@ def get_finalised_entries_for_batch(
 
     start_time = utils.parse_hail_time(batch['time_created'])
     end_time = utils.parse_hail_time(batch['time_completed'])
-    prop_map = get_ratios_from_date(start_time, proportion_map)
+    _, prop_map = get_ratios_from_date(start_time, proportion_map)
 
     currency_conversion_rate = utils.get_currency_conversion_rate_for_time(start_time)
 
@@ -169,6 +170,7 @@ def get_finalised_entries_for_batch(
                         labels={
                             **labels,
                             'dataset': dataset,
+                            # awkward way to round to 2 decimal places in Python
                             'fraction': round(100 * fraction) / 100,
                         },
                     )
@@ -304,16 +306,20 @@ def migrate_entries_from_bq(
             if obj['cost'] == 0:
                 # come on now
                 continue
+
+            del obj['billing_account_id']
+            del obj['project']
+            labels = obj['labels']
+
             usage_start_time = datetime.fromtimestamp(
                 int(obj['usage_start_time'] / 1000)
             )
-            del obj['billing_account_id']
-            del obj['project']
+
             if current_date is None or usage_start_time > current_date:
                 # use and abuse the
-                param_map = get_ratios_from_date(usage_start_time, prop_map)
-
-            labels = obj['labels']
+                current_date, param_map = get_ratios_from_date(
+                    date=usage_start_time, prop_map=prop_map
+                )
 
             for dataset, ratio in param_map.items():
 
@@ -513,7 +519,7 @@ async def generate_proportionate_map_of_dataset(
 
 def get_ratios_from_date(
     date: datetime, prop_map: ProportionateMapType
-) -> dict[str, float]:
+) -> tuple[datetime, dict[str, float]]:
     """
     From the prop_map, get the ratios for the applicable date
     """
@@ -524,7 +530,7 @@ def get_ratios_from_date(
     for dt, m in prop_map[::-1]:
         # first entry BEFORE the date
         if dt <= date:
-            return m
+            return dt, m
 
     raise AssertionError(f'No ratio found for date {date}')
 

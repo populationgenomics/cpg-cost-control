@@ -17,7 +17,6 @@ Tasks:
 import re
 import json
 import hashlib
-import logging
 from datetime import datetime
 from typing import Dict, Optional
 
@@ -76,7 +75,7 @@ def migrate_billing_data(start, end, dataset_to_gcp_map) -> int:
     )
 
     if len(migrate_rows) == 0:
-        logging.info(f'No rows to migrate')
+        logger.info('No rows to migrate')
         return 0
 
     # Add id and dataset to the row
@@ -101,10 +100,10 @@ def main(start: datetime = None, end: datetime = None) -> int:
     # Migrate the data in batches
     result = 0
     for itrvl_start, itrvl_end in interval_iterator:
-        logging.info(f'Migrating data from {itrvl_start} to {itrvl_end}')
+        logger.info(f'Migrating data from {itrvl_start} to {itrvl_end}')
         result += migrate_billing_data(itrvl_start, itrvl_end, dataset_to_gcp_map)
 
-    logging.info(f'Migrated a total of {result} rows')
+    logger.info(f'Migrated a total of {result} rows')
 
     return result
 
