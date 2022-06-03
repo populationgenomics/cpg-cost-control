@@ -35,7 +35,6 @@ import json
 import asyncio
 import hashlib
 from collections import defaultdict
-from copy import deepcopy
 from datetime import datetime, timedelta
 
 import yaml
@@ -324,7 +323,7 @@ def migrate_entries_from_bq(
 
             for dataset, ratio in param_map.items():
 
-                new_entry = deepcopy(obj)
+                new_entry = {**obj}
 
                 new_entry['topic'] = dataset
                 new_entry['service']['id'] = SERVICE_ID
@@ -392,6 +391,7 @@ async def generate_proportionate_map_of_dataset(
     # pylint: disable=too-many-locals
 
     # from 2022-06-01, we use it based on es-index, otherwise joint-calling
+    timeit_start = datetime.now()
     relevant_analysis = []
     sm_projects = await papi.get_all_projects_async()
     sm_pid_to_dataset = {p['id']: p['dataset'] for p in sm_projects}
@@ -404,7 +404,7 @@ async def generate_proportionate_map_of_dataset(
                 projects=['seqr'],
             )
         )
-        relevant_analysis.extend(a for a in es_indices)
+        relevant_analysis.extend(a for a in es_indices if a['timestamp_completed'])
 
     start_es_date = None
     if relevant_analysis:
@@ -429,7 +429,8 @@ async def generate_proportionate_map_of_dataset(
         relevant_analysis.extend(
             a
             for a in joint_calls
-            if datetime.fromisoformat(a['timestamp_completed']) <= jc_end
+            if a['timestamp_completed']
+            and datetime.fromisoformat(a['timestamp_completed']) <= jc_end
         )
 
     relevant_analysis = sorted(
@@ -465,6 +466,11 @@ async def generate_proportionate_map_of_dataset(
     # Crams in SM only have one sample_id, so easy to link
     # the cram back to the specific internal sample ID
     cram_map = {c['sample_ids'][0]: c for c in crams}
+
+    logger.debug(
+        f'Took {(datetime.now() - timeit_start).total_seconds()} to get analyis_objects'
+    )
+    timeit_start = datetime.now()
 
     missing_samples = set()
     missing_sizes = {}
@@ -505,6 +511,10 @@ async def generate_proportionate_map_of_dataset(
                 },
             )
         )
+
+    logger.debug(
+        f'Took {(datetime.now() - timeit_start).total_seconds()} to prepare prop map'
+    )
 
     if missing_samples:
         print('Missing crams: ' + ', '.join(missing_samples))
@@ -586,7 +596,7 @@ async def main(start: datetime = None, end: datetime = None, dry_run=False):
     prop_map = await generate_proportionate_map_of_dataset(start, end, projects)
     result = 0
 
-    result += migrate_entries_from_bq(start, end, prop_map, dry_run=dry_run)
+    # result += migrate_entries_from_bq(start, end, prop_map, dry_run=dry_run)
 
     def func_get_finalised_entries(batch):
         return get_finalised_entries_for_batch(batch, prop_map)
@@ -622,7 +632,7 @@ def from_pubsub(data=None, _=None):
 
 
 if __name__ == '__main__':
-    test_start, test_end = datetime(2022, 5, 25), None
+    test_start, test_end = None, None
     # test_start, test_end = datetime(2022, 5, 2), datetime(2022, 5, 5)
 
     asyncio.new_event_loop().run_until_complete(

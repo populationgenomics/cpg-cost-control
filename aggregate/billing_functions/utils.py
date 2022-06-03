@@ -9,7 +9,6 @@ import json
 import logging
 from pathlib import Path
 from io import StringIO
-from copy import deepcopy
 from collections import defaultdict
 from datetime import datetime, timedelta
 import sys
@@ -25,10 +24,13 @@ from google.api_core.exceptions import ClientError
 
 
 logger = logging.getLogger('Cost Aggregate')
+
+handler = logging.StreamHandler(sys.stderr)
+handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s: %(message)s'))
+
+logger.addHandler(handler)
 if os.getenv('DEV') in ('1', 'true', 'yes'):
     logger.setLevel(logging.DEBUG)
-else:
-    logger.setLevel(logging.INFO)
 
 # pylint: disable=invalid-name
 T = TypeVar('T')
@@ -219,7 +221,7 @@ def get_credits(
     if not description:
         description = f'{topic} credit to correctly account for costs'
 
-    hail_credits = [deepcopy(e) for e in entries]
+    hail_credits = [{**e} for e in entries]
     for entry in hail_credits:
 
         entry['topic'] = topic
@@ -377,6 +379,8 @@ async def migrate_entries_from_hail_in_chunks(
 
     Break them down by dataset, and then proportion the rest of the costs.
     """
+
+    # pylint: disable=too-many-locals
     token = get_hail_token()
     result = 0
     lp = f'{log_prefix} ::' if log_prefix else ''
@@ -416,8 +420,27 @@ async def migrate_entries_from_hail_in_chunks(
         # insert all entries for this batch
         for batch, jobs in zip(btch_grp, jobs_in_batch):
             batch['jobs'] = jobs
+            if len(jobs) > 10000 and len(entries) > 1000:
+                logger.info(
+                    f'Expecting large number of jobs ({len(jobs)}) from '
+                    f'batch {batch["id"]}, inserting contents early'
+                )
+                result += insert_new_rows_in_table(
+                    table=GCP_AGGREGATE_DEST_TABLE, objs=entries, dry_run=dry_run
+                )
+                entries = []
 
-            entries.extend(func_get_finalised_entries_for_batch(batch))
+            entries_for_batch = func_get_finalised_entries_for_batch(batch)
+            logger.info(f'Got {len(entries_for_batch)} entries for batch {batch["id"]}')
+            entries.extend(entries_for_batch)
+
+            s = sum(sys.getsizeof(e) for e in entries) / 1024 / 1024
+            if s > 10:
+                logger.info(f'Size of entries: {s} MB, inserting early')
+                result += insert_new_rows_in_table(
+                    table=GCP_AGGREGATE_DEST_TABLE, objs=entries, dry_run=dry_run
+                )
+                entries = []
 
         result += insert_new_rows_in_table(
             table=GCP_AGGREGATE_DEST_TABLE, objs=entries, dry_run=dry_run
@@ -467,7 +490,7 @@ def insert_new_rows_in_table(
             )
 
     if n_chunks > 1:
-        logger.info(f'Will insert rows in {n_chunks} chunks')
+        logger.info(f'Will insert {len(objs)} rows in {n_chunks} chunks')
 
     inserts = 0
 
