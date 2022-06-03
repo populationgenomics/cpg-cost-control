@@ -33,6 +33,7 @@ on:
   push:
     branches:
       - main
+      - aggregation
 
 env:
   PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
