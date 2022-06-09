@@ -136,7 +136,9 @@ class TestGetFinalisedEntriesForBatch(unittest.TestCase):
         self.assertTrue(all(e['id'].endswith('-credit') for e in expected_credits))
         self.assertTrue(all(e['cost'] >= 0 for e in expected_debits))
         self.assertTrue(all(e['cost'] <= 0 for e in expected_credits))
-        self.assertEqual(0, sum(e['cost'] for e in entries))
+
+        # we might have residual, due to rounding
+        self.assertAlmostEqual(0, sum(e['cost'] for e in entries), places=10)
 
         # check the prop map number of entries is working as expected
         count_per_topic = defaultdict(int)
