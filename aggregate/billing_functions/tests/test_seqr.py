@@ -83,7 +83,7 @@ class TestSeqrAggregateBillingFunctionality(unittest.TestCase):
         self.assertAlmostEqual(0.327272, prop_map2['DS3'], places=3)
 
 
-class TestGetFinalisedEntriesForBatch(unittest.TestCase):
+class TestSeqrGetFinalisedEntriesForBatch(unittest.TestCase):
     @patch('aggregate.billing_functions.utils.get_currency_conversion_rate_for_time')
     def test_simple(self, mock_currency_conversion_rate):
         """
