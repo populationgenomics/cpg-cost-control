@@ -1,4 +1,4 @@
-name: Lint
+name: Lint + Test
 on: push
 
 jobs:
@@ -28,4 +28,12 @@ jobs:
 
       - name: "Run doctests"
         run: |
-          pytest aggregate/billing_functions --doctest-modules
+          pytest \
+            -v \
+            --doctest-modules \
+            --ignore gcp_cost_control \
+            --ignore gcp_cost_report \
+            --ignore aggregate/__main__.py \
+            --ignore aggregate/main.py \
+            --ignore aggregate/local.py
+

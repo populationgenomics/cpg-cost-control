@@ -185,7 +185,12 @@ def get_formatted_bq_schema() -> list[bq.SchemaField]:
 
 
 def parse_hail_time(time_str: str) -> datetime:
-    """Parse hail datetime object"""
+    """
+    Parse hail datetime object
+
+    >>> parse_hail_time('2022-06-09T04:59:58Z').isoformat()
+    '2022-06-09T04:59:58'
+    """
     return datetime.strptime(time_str, '%Y-%m-%dT%H:%M:%SZ')
 
 
@@ -197,7 +202,6 @@ def to_bq_time(time: datetime):
 def get_hail_token() -> str:
     """
     Get Hail token from local tokens file
-    TODO: look at env var for deploy
     """
     if os.getenv('DEV') in ('1', 'true', 'yes'):
         with open(os.path.expanduser('~/.hail/tokens.json'), encoding='utf-8') as f:
