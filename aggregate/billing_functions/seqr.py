@@ -176,7 +176,9 @@ def get_finalised_entries_for_batch(
                 )
 
     entries.extend(
-        utils.get_credits(entries, topic='hail', project=utils.HAIL_PROJECT_FIELD)
+        utils.get_credits(
+            entries=entries, topic='hail', project=utils.HAIL_PROJECT_FIELD
+        )
     )
 
     return entries
@@ -353,7 +355,7 @@ def migrate_entries_from_bq(
         entries = list(entries_by_id.values())
         entries.extend(
             utils.get_credits(
-                entries_by_id.values(),
+                entries=entries_by_id.values(),
                 topic='seqr',
                 project=utils.SEQR_PROJECT_FIELD,
             )
@@ -389,12 +391,32 @@ async def generate_proportionate_map_of_dataset(
     """
 
     # pylint: disable=too-many-locals
+    sm_projects = await papi.get_all_projects_async()
+    sm_pid_to_dataset = {p['id']: p['dataset'] for p in sm_projects}
 
+    filtered_projects = list(set(sm_pid_to_dataset.values()).intersection(projects))
+    missing_projects = set(projects) - set(sm_pid_to_dataset.values())
+    if missing_projects:
+        logger.warning(
+            f'The datasets {", ".join(missing_projects)} were not found in SM'
+        )
+
+    analyses, crams = await get_analysis_objects_and_crams_for_prop_map(
+        start, end, filtered_projects
+    )
+    return get_prop_map_from(analyses, crams, project_id_map=sm_pid_to_dataset)
+
+
+async def get_analysis_objects_and_crams_for_prop_map(
+    start: datetime, end: datetime, projects: list[str]
+):
+    """
+    Fetch the relevant analysis objects + crams from sample-metadata
+    to put together the proportionate_map.
+    """
     # from 2022-06-01, we use it based on es-index, otherwise joint-calling
     timeit_start = datetime.now()
     relevant_analysis = []
-    sm_projects = await papi.get_all_projects_async()
-    sm_pid_to_dataset = {p['id']: p['dataset'] for p in sm_projects}
 
     if end > ES_ANALYSIS_OBJ_INTRO_DATE:
         es_indices = await aapi.query_analyses_async(
@@ -447,29 +469,30 @@ async def generate_proportionate_map_of_dataset(
 
     all_samples = set(s for a in relevant_analysis for s in a['sample_ids'])
 
-    filtered_projects = list(set(sm_pid_to_dataset.values()).intersection(projects))
-    missing_projects = set(projects) - set(sm_pid_to_dataset.values())
-    if missing_projects:
-        logger.warning(
-            f'The datasets {", ".join(missing_projects)} were not found in SM'
-        )
-
     crams = await aapi.query_analyses_async(
         AnalysisQueryModel(
             sample_ids=list(all_samples),
             type=AnalysisType('cram'),
-            projects=filtered_projects,
+            projects=projects,
             status=AnalysisStatus('completed'),
         )
     )
+    logger.debug(
+        f'Took {(datetime.now() - timeit_start).total_seconds()} to get analysis_objects'
+    )
+
+    return relevant_analysis, crams
+
+
+def get_prop_map_from(
+    relevant_analyses: list[dict], crams: list[dict], project_id_map: dict[int, str]
+) -> ProportionateMapType:
+    """From prefetched analysis, compute the proprtionate_map"""
 
     # Crams in SM only have one sample_id, so easy to link
     # the cram back to the specific internal sample ID
     cram_map = {c['sample_ids'][0]: c for c in crams}
 
-    logger.debug(
-        f'Took {(datetime.now() - timeit_start).total_seconds()} to get analyis_objects'
-    )
     timeit_start = datetime.now()
 
     missing_samples = set()
@@ -477,7 +500,7 @@ async def generate_proportionate_map_of_dataset(
 
     proportioned_datasets: ProportionateMapType = []
 
-    for analysis in relevant_analysis:
+    for analysis in relevant_analyses:
 
         # Using timestamp_completed as the start time for the propmap
         # is a small problem because then this script won't charge the new samples
@@ -506,7 +529,7 @@ async def generate_proportionate_map_of_dataset(
             (
                 dt,
                 {
-                    sm_pid_to_dataset[project_id]: size / total_size
+                    project_id_map[project_id]: size / total_size
                     for project_id, size in size_per_project.items()
                 },
             )
@@ -596,7 +619,7 @@ async def main(start: datetime = None, end: datetime = None, dry_run=False):
     prop_map = await generate_proportionate_map_of_dataset(start, end, projects)
     result = 0
 
-    # result += migrate_entries_from_bq(start, end, prop_map, dry_run=dry_run)
+    result += migrate_entries_from_bq(start, end, prop_map, dry_run=dry_run)
 
     def func_get_finalised_entries(batch):
         return get_finalised_entries_for_batch(batch, prop_map)
