@@ -114,7 +114,11 @@ def get_finalised_entries_for_batch(batch: dict) -> List[Dict]:
             )
         )
 
-    entries.extend(utils.get_credits(entries=entries, topic='hail', project=utils.HAIL_PROJECT_FIELD))
+    entries.extend(
+        utils.get_credits(
+            entries=entries, topic='hail', project=utils.HAIL_PROJECT_FIELD
+        )
+    )
 
     return entries
 

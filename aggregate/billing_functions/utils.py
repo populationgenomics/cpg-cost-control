@@ -133,7 +133,7 @@ async def async_retry_transient_get_json_request(
                 if attempt == attempts:
                     raise
 
-            t = 2**(attempt+1)
+            t = 2 ** (attempt + 1)
             logger.warning(f'Backing off {t} seconds for {url}')
             await asyncio.sleep(t)
 
@@ -216,7 +216,7 @@ def get_credits(
     entries: Iterable[dict[str, Any]],
     topic: str,
     project: dict,
-    description: str=None,
+    description: str = None,
 ) -> list[dict[str, any]]:
     """
     Get a hail/seqr credit for each entry

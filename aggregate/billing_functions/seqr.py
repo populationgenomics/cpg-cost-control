@@ -478,7 +478,7 @@ async def get_analysis_objects_and_crams_for_prop_map(
         )
     )
     logger.debug(
-        f'Took {(datetime.now() - timeit_start).total_seconds()} to get analysis_objects'
+        f'Took {(datetime.now() - timeit_start).total_seconds()} to get analyses'
     )
 
     return relevant_analysis, crams
@@ -656,8 +656,8 @@ def from_pubsub(data=None, _=None):
 
 if __name__ == '__main__':
     test_start, test_end = None, None
-    # test_start, test_end = datetime(2022, 5, 2), datetime(2022, 5, 5)
+    test_start, test_end = datetime(2022, 5, 1), datetime(2022, 6, 10)
 
     asyncio.new_event_loop().run_until_complete(
-        main(start=test_start, end=test_end, dry_run=True)
+        main(start=test_start, end=test_end, dry_run=False)
     )

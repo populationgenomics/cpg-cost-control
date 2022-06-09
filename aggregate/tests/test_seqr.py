@@ -1,3 +1,5 @@
+"""seqr aggregator testing"""
+
 import unittest
 from collections import defaultdict
 from datetime import datetime, timedelta
@@ -9,11 +11,20 @@ from aggregate.billing_functions.seqr import (
 )
 
 
-class TestSeqrAggregateBillingFunctionality(unittest.TestCase):
+class TestSeqrPropMapFunctionality(unittest.TestCase):
+    """
+    Test the propmap functionality of the seqr billing aggregator
+    """
+
     def test_seqr_prop_map_simple(self):
+        """
+        Simple test map with two datasets summing to 4:
+            DS1: 1 sample with size=1 -> 25%
+            DS2: 1 sample with size=3 -> 75%
+        """
         project_id_map = {1: 'DS1', 2: 'DS2'}
         project_ids = list(project_id_map.keys())
-        sid_to_size = [('CPG1', 100), ('CPG2', 300)]
+        sid_to_size = [('CPG1', 1), ('CPG2', 3)]
         crams = [
             {
                 'sample_ids': [sid],
@@ -30,20 +41,26 @@ class TestSeqrAggregateBillingFunctionality(unittest.TestCase):
             }
         ]
         prop_map = get_prop_map_from(analyses, crams, project_id_map=project_id_map)
-        print(prop_map)
 
         prop_map_expected = {'DS1': 0.25, 'DS2': 0.75}
-
         self.assertEqual(1, len(prop_map))
+        # noting that the propmap wipes two days off the analysis date
+        # to cover analysis covered to generate the propmap
         self.assertEqual(dt - timedelta(days=2), prop_map[0][0])
         self.assertDictEqual(prop_map_expected, prop_map[0][1])
 
     def test_seqr_prop_map_complex(self):
+        """
+        More complex analysis with
+            3 datasets across 2 dates
+            w/ varying levels of samples in each
+        calculations are listed below
+        """
 
         project_id_map = {1: 'DS1', 2: 'DS2', 3: 'DS3'}
         project_ids = list(project_id_map.keys())
 
-        sid_to_size = [(f'CPG{i}', i * 100) for i in range(1, 11)]
+        sid_to_size = [(f'CPG{i}', i) for i in range(1, 11)]
         crams = [
             {
                 'sample_ids': [sid],
@@ -64,18 +81,19 @@ class TestSeqrAggregateBillingFunctionality(unittest.TestCase):
             },
         ]
         prop_map = get_prop_map_from(analyses, crams, project_id_map=project_id_map)
-        print(prop_map)
 
-        # 100 + 400 + 700 + 1000:
-        # 200 + 500 + 800: 700 0.4666
-        # 300 + 600 + 900      : 300 0.2
-
+        # 1 + 4:    5/15 => 0.33...
+        # 2 + 5:    7/15 => 0.466...
+        # 3:        3/15 => 0.2
         prop_map1 = prop_map[0][1]
         self.assertAlmostEqual(0.33333, prop_map1['DS1'], places=3)
         self.assertAlmostEqual(0.46666, prop_map1['DS2'], places=3)
         self.assertAlmostEqual(0.2, prop_map1['DS3'])
         self.assertEqual(1, sum(prop_map1.values()))
 
+        # 100 + 400 + 700 + 1000:   2200/5500 => 0.4
+        # 200 + 500 + 800:          1500/5500 => 0.27...
+        # 300 + 600 + 900:          1800/5500 => 0.3272...
         prop_map2 = prop_map[1][1]
         self.assertEqual(1, sum(prop_map1.values()))
         self.assertAlmostEqual(0.4, prop_map2['DS1'])
@@ -84,6 +102,8 @@ class TestSeqrAggregateBillingFunctionality(unittest.TestCase):
 
 
 class TestSeqrGetFinalisedEntriesForBatch(unittest.TestCase):
+    """Test the batch -> list[entries] functionality"""
+
     @patch('aggregate.billing_functions.utils.get_currency_conversion_rate_for_time')
     def test_simple(self, mock_currency_conversion_rate):
         """
@@ -102,7 +122,7 @@ class TestSeqrGetFinalisedEntriesForBatch(unittest.TestCase):
         resources = {
             'compute/n1-preemptible/1': 1e6,
             'memory/n1-preemptible/1': 1e6,
-            'service-fee/1': 1, # this should get filtered out
+            'service-fee/1': 1,  # this should get filtered out
         }
         batch = {
             'id': 42,
@@ -123,8 +143,10 @@ class TestSeqrGetFinalisedEntriesForBatch(unittest.TestCase):
             'attributes': {'name': 'TESTBATCH'},
         }
 
-        # (2 + 4) * 2 = 12
-        # n entries => (2 (for job 1) + 4 (for job 2: one for each dataset)) * 2 (for credits)
+        #
+        # n entries => (2 + 4) * 2 = 12 => (
+        #   2 (for job 1) + 4 (for job 2: one for each dataset)
+        #   * 2 (for credits)
         entries = get_finalised_entries_for_batch(batch, prop_map)
 
         expected_debits = entries[:6]
@@ -152,7 +174,11 @@ class TestSeqrGetFinalisedEntriesForBatch(unittest.TestCase):
         # check the proportionate cost is working correctly
         debits_for_job_2 = entries[2:6]
         total_debits_for_job_2 = sum(e['cost'] for e in debits_for_job_2)
-        debits_for_job_2_ds1 = sum(e['cost'] for e in debits_for_job_2 if e['topic'] == 'DS1')
-        debits_for_job_2_ds2 = sum(e['cost'] for e in debits_for_job_2 if e['topic'] == 'DS2')
+        debits_for_job_2_ds1 = sum(
+            e['cost'] for e in debits_for_job_2 if e['topic'] == 'DS1'
+        )
+        debits_for_job_2_ds2 = sum(
+            e['cost'] for e in debits_for_job_2 if e['topic'] == 'DS2'
+        )
         self.assertAlmostEqual(0.25, debits_for_job_2_ds1 / total_debits_for_job_2)
         self.assertAlmostEqual(0.75, debits_for_job_2_ds2 / total_debits_for_job_2)

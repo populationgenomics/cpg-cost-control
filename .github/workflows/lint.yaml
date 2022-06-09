@@ -36,4 +36,3 @@ jobs:
             --ignore aggregate/__main__.py \
             --ignore aggregate/main.py \
             --ignore aggregate/local.py
-

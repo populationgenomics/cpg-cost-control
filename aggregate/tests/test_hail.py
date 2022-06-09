@@ -1,3 +1,4 @@
+"""Test hail aggregate functionality"""
 import unittest
 from collections import defaultdict
 from unittest.mock import patch
@@ -6,6 +7,8 @@ from aggregate.billing_functions.hail import get_finalised_entries_for_batch
 
 
 class TestHailGetFinalisedEntriesForBatch(unittest.TestCase):
+    """Test the batch -> list[entries] functionality"""
+
     @patch('aggregate.billing_functions.utils.get_currency_conversion_rate_for_time')
     def test_simple(self, mock_currency_conversion_rate):
         """
@@ -20,7 +23,7 @@ class TestHailGetFinalisedEntriesForBatch(unittest.TestCase):
         resources = {
             'compute/n1-preemptible/1': 1e6,
             'memory/n1-preemptible/1': 1e6,
-            'service-fee/1': 1,     # this should get filtered out
+            'service-fee/1': 1,  # this should get filtered out
         }
         batch = {
             'id': 42,
