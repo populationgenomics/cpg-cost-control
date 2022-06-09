@@ -768,14 +768,12 @@ def get_start_and_end_from_data(data) -> tuple[datetime | None, datetime | None]
 
         logger.info(f'data: {data}, dates: {dates}')
 
-        start = dates.get('start', '')
-        end = dates.get('end', '')
+        s_raw = dates.get('start')
+        e_raw = dates.get('end')
 
-        try:
-            start, end = datetime.fromisoformat(start), datetime.fromisoformat(end)
-        except ValueError as error:
-            logger.error(f'Error: {error}')
-            return (None, None)
+        # this should except if the start/end is in an invalid format
+        start = datetime.fromisoformat(s_raw) if s_raw else None
+        end = datetime.fromisoformat(e_raw) if e_raw else None
 
         return (start, end)
 
