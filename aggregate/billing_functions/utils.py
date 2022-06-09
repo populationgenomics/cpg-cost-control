@@ -135,7 +135,7 @@ async def async_retry_transient_get_json_request(
 
             t = 2**(attempt+1)
             logger.warning(f'Backing off {t} seconds for {url}')
-            asyncio.sleep(t)
+            await asyncio.sleep(t)
 
     if session:
         return await inner_block(session)
