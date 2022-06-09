@@ -209,10 +209,10 @@ def get_hail_token() -> str:
 
 
 def get_credits(
-    entries,
-    topic: str = 'hail',
-    project: dict = None,
-    description: str = None,
+    entries: list[dict[str, Any]],
+    topic: str,
+    project: dict,
+    description: str,
 ) -> list[dict[str, any]]:
     """
     Get a hail/seqr credit for each entry
@@ -231,8 +231,9 @@ def get_credits(
             'id': 'aggregated-credit',
             'description': description,
         }
-        entry['sku']['id'] += '-credit'
-        entry['sku']['description'] += '-credit'
+        sku = {**entry['sku']}
+        sku['id'] += '-credit'
+        sku['description'] += '-credit'
         entry['project'] = project
 
     return hail_credits
