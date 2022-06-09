@@ -498,7 +498,7 @@ def insert_new_rows_in_table(
 
     inserts = 0
 
-    for chunked_objs in chunk(objs, chunk_size):
+    for chunk_idx, chunked_objs in enumerate(chunk(objs, chunk_size)):
 
         _query = f"""
             SELECT id FROM `{table}`
@@ -539,7 +539,10 @@ def insert_new_rows_in_table(
             continue
 
         # Count number of rows adding
-        logger.info(f'Inserting {nrows}/{len(chunked_objs)} rows')
+        logger.info(
+            f'Inserting {nrows}/{len(chunked_objs)} rows '
+            f'({chunk_idx+1}/{n_chunks} chunk)'
+        )
 
         # Insert the new rows
         job_config = bq.LoadJobConfig()
@@ -553,7 +556,10 @@ def insert_new_rows_in_table(
         )
         try:
             result = resp.result()
-            logger.info(f'Inserted {result.output_rows}/{nrows} rows')
+            logger.info(
+                f'Inserted {result.output_rows}/{nrows} rows '
+                f'({chunk_idx+1}/{n_chunks} chunk)'
+            )
         except ClientError as e:
             logger.error(resp.errors)
             raise e
