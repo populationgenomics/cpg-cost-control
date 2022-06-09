@@ -12,7 +12,7 @@ from io import StringIO
 from collections import defaultdict
 from datetime import datetime, timedelta
 import sys
-from typing import Any, Iterator, Sequence, TypeVar
+from typing import Any, Iterator, Sequence, TypeVar, Iterable
 
 import asyncio
 import aiohttp
@@ -133,7 +133,7 @@ async def async_retry_transient_get_json_request(
                 if attempt == attempts:
                     raise
 
-            t = 2**attempt
+            t = 2**(attempt+1)
             logger.warning(f'Backing off {t} seconds for {url}')
             asyncio.sleep(t)
 
@@ -209,10 +209,10 @@ def get_hail_token() -> str:
 
 
 def get_credits(
-    entries: list[dict[str, Any]],
+    entries: Iterable[dict[str, Any]],
     topic: str,
     project: dict,
-    description: str,
+    description: str=None,
 ) -> list[dict[str, any]]:
     """
     Get a hail/seqr credit for each entry
@@ -394,7 +394,6 @@ async def migrate_entries_from_hail_in_chunks(
 
     chnk_counter = 0
     nchnks = math.ceil(len(batches) / entry_chunk_size) * batch_group_chunk_size
-    jobs_in_batch = []
 
     # Process chunks of batches to avoid loading too many entries into memory
     for btch_grp in chunk(batches, entry_chunk_size):
