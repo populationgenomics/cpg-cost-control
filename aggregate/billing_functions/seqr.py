@@ -59,7 +59,7 @@ ProportionateMapType = list[tuple[datetime, dict[str, float]]]
 
 SERVICE_ID = 'seqr'
 SEQR_HAIL_BILLING_PROJECT = 'seqr'
-ES_ANALYSIS_OBJ_INTRO_DATE = datetime(2022, 6, 30)
+ES_ANALYSIS_OBJ_INTRO_DATE = datetime(2022, 6, 10)
 
 GCP_BILLING_BQ_TABLE = (
     'billing-admin-290403.billing.gcp_billing_export_v1_01D012_20A6A2_CBD343'
@@ -136,8 +136,8 @@ def get_finalised_entries_for_batch(
                 'url': hail_ui_url,
             }
 
-            gross_cost = currency_conversion_rate * utils.get_usd_cost_for_resource(
-                batch_resource, usage
+            gross_cost = utils.get_total_hail_cost(
+                currency_conversion_rate, batch_resource, usage
             )
 
             for dataset, fraction in prop_map.items():
@@ -226,9 +226,7 @@ def get_finalised_entries_for_dataset_batch_and_job(
         labels['batch_resource'] = batch_resource
         labels['url'] = hail_ui_url
 
-        cost = currency_conversion_rate * utils.get_usd_cost_for_resource(
-            batch_resource, usage
-        )
+        cost = utils.get_total_hail_cost(currency_conversion_rate, batch_resource, usage)
 
         key = '-'.join(
             (

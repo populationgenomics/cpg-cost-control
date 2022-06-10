@@ -152,6 +152,16 @@ def chunk(iterable: Sequence[T], chunk_size) -> Iterator[Sequence[T]]:
         yield iterable[i : i + chunk_size]
 
 
+def get_total_hail_cost(currency_conversion_rate, batch_resource, usage):
+    """Get cost from hail batch_resource, including SERVICE_FEE"""
+
+    return (
+        (1 + HAIL_SERVICE_FEE)
+        * currency_conversion_rate
+        * get_usd_cost_for_resource(batch_resource, usage)
+    )
+
+
 def get_bq_schema_json() -> dict[str, any]:
     """Get the schema for the table"""
     pwd = Path(__file__).parent.parent.resolve()
@@ -216,28 +226,24 @@ def get_credits(
     entries: Iterable[dict[str, Any]],
     topic: str,
     project: dict,
-    description: str = None,
 ) -> list[dict[str, any]]:
     """
-    Get a hail/seqr credit for each entry
+    Get a hail/seqr credit for each entry.
     """
-
-    if not description:
-        description = f'{topic} credit to correctly account for costs'
 
     hail_credits = [{**e} for e in entries]
     for entry in hail_credits:
-
         entry['topic'] = topic
         entry['id'] += '-credit'
         entry['cost'] = -entry['cost']
         entry['service'] = {
-            'id': 'aggregated-credit',
-            'description': description,
+            **entry['service'],
+            'description': entry['service']['description'] + ' Credit',
         }
         sku = {**entry['sku']}
         sku['id'] += '-credit'
         sku['description'] += '-credit'
+        entry['sku'] = sku
         entry['project'] = project
 
     return hail_credits
@@ -435,7 +441,6 @@ async def migrate_entries_from_hail_in_chunks(
                 entries = []
 
             entries_for_batch = func_get_finalised_entries_for_batch(batch)
-            logger.info(f'Got {len(entries_for_batch)} entries for batch {batch["id"]}')
             entries.extend(entries_for_batch)
 
             s = sum(sys.getsizeof(e) for e in entries) / 1024 / 1024
