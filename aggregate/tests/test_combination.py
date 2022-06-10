@@ -12,12 +12,12 @@ from aggregate.billing_functions.seqr import (
 )
 
 resources = {
-    "compute/n1-preemptible/1": 27176048000,
-    "disk/local-ssd/1": 652225152000,
-    "disk/pd-ssd/1": 17392670720,
-    "ip-fee/1024/1": 1739267072,
-    "memory/n1-preemptible/1": 104356024320,
-    "service-fee/1": 27176048000,
+    'compute/n1-preemptible/1': 27176048000,
+    'disk/local-ssd/1': 652225152000,
+    'disk/pd-ssd/1': 17392670720,
+    'ip-fee/1024/1': 1739267072,
+    'memory/n1-preemptible/1': 104356024320,
+    'service-fee/1': 27176048000,
 }
 batch = {
     'id': 42,
@@ -41,11 +41,20 @@ batch = {
 
 
 class TestCombinationCosts(unittest.TestCase):
+    """
+    Test that hail / seqr aggregators return equivalent costs
+    """
+
     @unittest.mock.patch(
         'aggregate.billing_functions.utils.get_currency_conversion_rate_for_time'
     )
-    def test_simple_single_job(self, mock_currency_conversion_rate):
-
+    def test_complex_job(self, mock_currency_conversion_rate):
+        """
+        Test a batch that:
+            - hail aggregator will create one entry per resource per batch
+            - seqr aggregator may create many entries per resource per batch:
+                - Divided based on the proportional map and dataset attribute
+        """
         mock_currency_conversion_rate.return_value = 2.0
 
         prop_map = [(datetime(2020, 1, 1), {'DS1': 0.3, 'DS2': 0.7})]

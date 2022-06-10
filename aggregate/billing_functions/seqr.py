@@ -226,7 +226,9 @@ def get_finalised_entries_for_dataset_batch_and_job(
         labels['batch_resource'] = batch_resource
         labels['url'] = hail_ui_url
 
-        cost = utils.get_total_hail_cost(currency_conversion_rate, batch_resource, usage)
+        cost = utils.get_total_hail_cost(
+            currency_conversion_rate, batch_resource, usage
+        )
 
         key = '-'.join(
             (

@@ -76,6 +76,10 @@ class TestHailGetFinalisedEntriesForBatch(unittest.TestCase):
         self.assertEqual(4, len(set(e['id'] for e in entries)))
 
     def test_should_ignore_seqr(self):
+        """
+        The hail aggregator should ignore any batches in
+        seqr / hail billing projects.
+        """
         resources = {
             'compute/n1-preemptible/1': 1e6,
             'memory/n1-preemptible/1': 1e6,
@@ -92,3 +96,7 @@ class TestHailGetFinalisedEntriesForBatch(unittest.TestCase):
 
         seqr_entries = get_finalised_entries_for_batch(batch)
         self.assertEqual(0, len(seqr_entries))
+
+        batch['billing_project'] = 'hail'
+        hail_entries = get_finalised_entries_for_batch(batch)
+        self.assertEqual(0, len(hail_entries))
