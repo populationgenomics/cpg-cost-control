@@ -53,6 +53,7 @@ class TestHailGetFinalisedEntriesForBatch(unittest.TestCase):
 
         # some basic checking
         self.assertEqual(len(entries), 4)
+        self.assertEqual(len(expected_credits), len(expected_debits))
         self.assertFalse(all(e['id'].endswith('-credit') for e in expected_debits))
         self.assertTrue(all(e['id'].endswith('-credit') for e in expected_credits))
         self.assertTrue(all(e['cost'] >= 0 for e in expected_debits))
@@ -61,11 +62,33 @@ class TestHailGetFinalisedEntriesForBatch(unittest.TestCase):
         # we might have residual, due to rounding
         self.assertAlmostEqual(0, sum(e['cost'] for e in entries), places=10)
 
-        # check the prop map number of entries is working as expected
         count_per_topic = defaultdict(int)
         for e in entries:
             count_per_topic[e['topic']] += 1
 
         self.assertSetEqual({'DS1'}, set(e['topic'] for e in expected_debits))
         self.assertSetEqual({'hail'}, set(e['topic'] for e in expected_credits))
+        self.assertSetEqual({'hail'}, set(e['service']['id'] for e in entries))
+        self.assertEqual(
+            {'Hail compute Credit', 'Hail compute'},
+            set(e['service']['description'] for e in entries),
+        )
         self.assertEqual(4, len(set(e['id'] for e in entries)))
+
+    def test_should_ignore_seqr(self):
+        resources = {
+            'compute/n1-preemptible/1': 1e6,
+            'memory/n1-preemptible/1': 1e6,
+            'service-fee/1': 1,  # this should get filtered out
+        }
+        batch = {
+            'id': 42,
+            'time_created': '2020-03-03T11:22:33Z',
+            'time_completed': '2020-03-03T12:22:33Z',
+            'billing_project': 'seqr',
+            'jobs': [{'job_id': 1, 'resources': resources}],
+            'attributes': {},
+        }
+
+        seqr_entries = get_finalised_entries_for_batch(batch)
+        self.assertEqual(0, len(seqr_entries))

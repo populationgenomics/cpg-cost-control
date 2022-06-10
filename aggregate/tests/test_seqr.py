@@ -154,6 +154,7 @@ class TestSeqrGetFinalisedEntriesForBatch(unittest.TestCase):
 
         # some basic checking
         self.assertEqual(len(entries), 12)
+        self.assertEqual(len(expected_credits), len(expected_debits))
         self.assertFalse(all(e['id'].endswith('-credit') for e in expected_debits))
         self.assertTrue(all(e['id'].endswith('-credit') for e in expected_credits))
         self.assertTrue(all(e['cost'] >= 0 for e in expected_debits))
@@ -169,6 +170,16 @@ class TestSeqrGetFinalisedEntriesForBatch(unittest.TestCase):
 
         self.assertDictEqual({'DS1': 4, 'DS2': 2}, count_per_topic)
         self.assertSetEqual({'hail'}, set(e['topic'] for e in expected_credits))
+        self.assertSetEqual({'seqr'}, set(e['service']['id'] for e in entries))
+        self.assertEqual(
+            {
+                'Seqr compute Credit',
+                'Seqr compute (distributed) Credit',
+                'Seqr compute (distributed)',
+                'Seqr compute',
+            },
+            set(e['service']['description'] for e in entries),
+        )
         self.assertEqual(12, len(set(e['id'] for e in entries)))
 
         # check the proportionate cost is working correctly
