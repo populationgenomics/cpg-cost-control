@@ -58,6 +58,10 @@ def get_finalised_entries_for_batch(batch: dict) -> List[Dict]:
     Take a batch, and generate the actual cost of all the jobs,
     and return a list of BigQuery rows - one per resource type.
     """
+
+    if batch['billing_project'] in EXCLUDED_BATCH_PROJECTS:
+        return []
+
     entries = []
 
     start_time = utils.parse_hail_time(batch['time_created'])
@@ -89,10 +93,8 @@ def get_finalised_entries_for_batch(batch: dict) -> List[Dict]:
 
         labels['url'] = utils.HAIL_UI_URL.replace('{batch_id}', str(batch_id))
 
-        cost = (
-            (1 + utils.HAIL_SERVICE_FEE)
-            * currency_conversion_rate
-            * utils.get_usd_cost_for_resource(batch_resource, usage)
+        cost = utils.get_total_hail_cost(
+            currency_conversion_rate, batch_resource, usage
         )
         entries.append(
             utils.get_hail_entry(
@@ -161,6 +163,6 @@ async def main(
 
 if __name__ == '__main__':
     test_start, test_end = None, None
-    # test_start, test_end = datetime(2022, 4, 1), datetime(2022, 5, 3)
+    test_start, test_end = datetime(2022, 5, 1), None
 
     asyncio.new_event_loop().run_until_complete(main(start=test_start, end=test_end))
