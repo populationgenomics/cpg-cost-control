@@ -44,7 +44,6 @@ class TestProcessingFunctions(unittest.TestCase):
         ]
 
         rows = pd.DataFrame.from_dict(rows)
-        print(rows)
 
         # Call topic function
         rows['topic'] = rows.apply(
