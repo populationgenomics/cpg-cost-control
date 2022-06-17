@@ -8,7 +8,7 @@ import pandas as pd
 # from collections import defaultdict
 # from unittest.mock import patch
 
-from aggregate.billing_functions.gcp import billing_row_to_topic  # , billing_row_to_key
+from aggregate.billing_functions.gcp import billing_row_to_topic
 
 
 class TestProcessingFunctions(unittest.TestCase):
@@ -31,13 +31,20 @@ class TestProcessingFunctions(unittest.TestCase):
             {'project': {'id': None}},
             {'project': {'id': 'acute-care-321904'}},
             {'project': {'id': 'circa-716939'}},
-            {'project': {'id': 'fewgenomies'}},
+            {'project': {'id': 'fewgenomes'}},
         ]
-        rows = pd.read_json(rows)
 
-        topics = ['abc', 'admin', 'admin'] + rows.values().map(
-            lambda x: x.get('project', {}).get('id')
-        )
+        topics = [
+            'abc',
+            'admin',
+            'admin',
+            'acute-care',
+            'circa-name-is-different',
+            'fewgenomes',
+        ]
+
+        rows = pd.DataFrame.from_dict(rows)
+        print(rows)
 
         # Call topic function
         rows['topic'] = rows.apply(

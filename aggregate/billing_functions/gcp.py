@@ -135,7 +135,12 @@ RE_matcher = re.compile(r'-\d+$')
 
 def billing_row_to_topic(row, dataset_to_gcp_map) -> Optional[str]:
     """Convert a billing row to a dataset"""
-    project_id = row['project']['id']
+
+    try:
+        project_id = row['project']['id']
+    except TypeError:
+        project_id = None
+
     topic = dataset_to_gcp_map.get(project_id, project_id)
     if not topic:
         return 'admin'
