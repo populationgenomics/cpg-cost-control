@@ -17,9 +17,11 @@ Tasks:
 import re
 import json
 import hashlib
+
 from datetime import datetime
 from typing import Dict, Optional
 
+from pandas import DataFrame
 import google.cloud.bigquery as bq
 
 try:
@@ -29,6 +31,11 @@ except ImportError:
 
 
 logger = utils.logger
+
+
+##########################
+#    INPUT PROCESSORS    #
+##########################
 
 
 def from_request(request):
@@ -47,6 +54,11 @@ def from_pubsub(data=None, _=None):
     main(start, end)
 
 
+#################
+#    MIGRATE    #
+#################
+
+
 def migrate_billing_data(start, end, dataset_to_gcp_map) -> int:
     """
     Get the billing date in the time period
@@ -55,6 +67,35 @@ def migrate_billing_data(start, end, dataset_to_gcp_map) -> int:
 
     def get_topic(row):
         return billing_row_to_topic(row, dataset_to_gcp_map)
+
+    migrate_rows = get_billing_data(start, end)
+
+    if len(migrate_rows) == 0:
+        logger.info('No rows to migrate')
+        return 0
+
+    # Add id and dataset to the row
+    migrate_rows = migrate_rows.drop(columns=['billing_account_id'])
+    migrate_rows.insert(0, 'topic', migrate_rows.apply(get_topic, axis=1))
+    migrate_rows.insert(0, 'id', migrate_rows.apply(billing_row_to_key, axis=1))
+
+    result = utils.insert_dataframe_rows_in_table(
+        utils.GCP_AGGREGATE_DEST_TABLE, migrate_rows
+    )
+
+    return result
+
+
+#################
+#    HELPERS    #
+#################
+
+
+def get_billing_data(start: datetime, end: datetime) -> DataFrame:
+    """
+    Retrieve the billing data from start to end date inclusive
+    Return results as a dataframe
+    """
 
     _query = f"""
         SELECT * FROM `{utils.GCP_BILLING_BQ_TABLE}`
@@ -75,38 +116,7 @@ def migrate_billing_data(start, end, dataset_to_gcp_map) -> int:
         .to_dataframe()
     )
 
-    if len(migrate_rows) == 0:
-        logger.info('No rows to migrate')
-        return 0
-
-    # Add id and dataset to the row
-    migrate_rows = migrate_rows.drop(columns=['billing_account_id'])
-    migrate_rows.insert(0, 'topic', migrate_rows.apply(get_topic, axis=1))
-    migrate_rows.insert(0, 'id', migrate_rows.apply(billing_row_to_key, axis=1))
-
-    result = utils.insert_dataframe_rows_in_table(
-        utils.GCP_AGGREGATE_DEST_TABLE, migrate_rows
-    )
-
-    return result
-
-
-def main(start: datetime = None, end: datetime = None) -> int:
-    """Main body function"""
-    interval_iterator = utils.get_date_intervals_for(start, end)
-
-    # Get the dataset to GCP project map
-    dataset_to_gcp_map = get_dataset_to_gcp_map()
-
-    # Migrate the data in batches
-    result = 0
-    for itrvl_start, itrvl_end in interval_iterator:
-        logger.info(f'Migrating data from {itrvl_start} to {itrvl_end}')
-        result += migrate_billing_data(itrvl_start, itrvl_end, dataset_to_gcp_map)
-
-    logger.info(f'Migrated a total of {result} rows')
-
-    return result
+    return migrate_rows
 
 
 def billing_row_to_key(row) -> str:
@@ -140,6 +150,29 @@ def get_dataset_to_gcp_map() -> Dict[str, str]:
         utils.read_secret(utils.ANALYSIS_RUNNER_PROJECT_ID, 'server-config')
     )
     return {v['projectId']: k for k, v in server_config.items()}
+
+
+##############
+#    MAIN    #
+##############
+
+
+def main(start: datetime = None, end: datetime = None) -> int:
+    """Main body function"""
+    interval_iterator = utils.get_date_intervals_for(start, end)
+
+    # Get the dataset to GCP project map
+    dataset_to_gcp_map = get_dataset_to_gcp_map()
+
+    # Migrate the data in batches
+    result = 0
+    for itrvl_start, itrvl_end in interval_iterator:
+        logger.info(f'Migrating data from {itrvl_start} to {itrvl_end}')
+        result += migrate_billing_data(itrvl_start, itrvl_end, dataset_to_gcp_map)
+
+    logger.info(f'Migrated a total of {result} rows')
+
+    return result
 
 
 if __name__ == '__main__':

@@ -2,6 +2,8 @@
 
 [![Billing Aggregation Deploy](https://github.com/populationgenomics/gcp-cost-control/actions/workflows/deploy-aggregate.yaml/badge.svg)](https://github.com/populationgenomics/gcp-cost-control/actions/workflows/deploy-aggregate.yaml)
 
+[![Billing Aggregation Codecov](https://codecov.io/github/populationgenomics/gcp-cost-control/coverage.svg?branch=master)](https://codecov.io/github/populationgenomics/gcp-cost-control?branch=master)
+
 This repository contains a Cloud Function that handles GCP billing budget
 notifications, inspired by the
 [official documentation](https://cloud.google.com/billing/docs/how-to/notify#cap_disable_billing_to_stop_usage),

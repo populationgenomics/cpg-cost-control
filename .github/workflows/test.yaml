@@ -1,30 +1,31 @@
-name: Lint + Doc Test
+name: Unittests
 on: push
 
 jobs:
-  lint:
+  run-unittests:
     runs-on: ubuntu-latest
+    env:
+      DOCKER_BUILDKIT: 1
+      BUILDKIT_PROGRESS: plain
+      CLOUDSDK_CORE_DISABLE_PROMPTS: 1
     defaults:
       run:
         shell: bash -l {0}
-
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@main
 
       - uses: actions/setup-python@v2
         with:
-          python-version: "3.10"
-          cache: "pip"
+          python-version: '3.10'
 
-      - name: Install packages
+      - name: Setup build env
         run: |
+          set -euxo pipefail
+
           pip install -r aggregate/requirements-dev.txt
           pip install -r aggregate/requirements.txt
           pip install -r gcp_cost_control/requirements.txt
           pip install -r gcp_cost_report/requirements.txt
-
-      - name: pre-commit
-        run: pre-commit run --all-files
 
       - name: "Run doctests"
         run: |
@@ -36,3 +37,13 @@ jobs:
             --ignore aggregate/__main__.py \
             --ignore aggregate/main.py \
             --ignore aggregate/local.py
+
+      - name: "Run unit tests"
+        run: |
+          coverage run -m unittest discover
+          coverage xml
+
+      - name: "Upload coverage report"
+        uses: codecov/codecov-action@v2
+        with:
+          files: ./coverage.xml
