@@ -1,9 +1,10 @@
 """
     Test gcp aggregate functionality
 """
-from datetime import datetime, timedelta
 
 import unittest
+from datetime import datetime, timedelta
+
 import pandas as pd
 
 from aggregate.billing_functions.utils import (
