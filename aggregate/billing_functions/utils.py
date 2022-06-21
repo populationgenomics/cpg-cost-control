@@ -461,9 +461,13 @@ async def migrate_entries_from_hail_in_chunks(
 RE_matcher = re.compile(r'-\d+$')
 
 
-def billing_row_to_topic(row, dataset_to_gcp_map) -> str | None:
+def billing_row_to_topic(row, dataset_to_gcp_map: dict) -> str | None:
     """Convert a billing row to a dataset"""
-    project_id = row['project']['id']
+    try:
+        project_id = row['project']['id']
+    except TypeError:
+        project_id = None
+
     topic = dataset_to_gcp_map.get(project_id, project_id)
 
     # Default topic, any cost not clearly associated with a project will be considered
@@ -776,7 +780,7 @@ def get_start_and_end_from_data(data) -> tuple[datetime | None, datetime | None]
         dates = {}
         if data.get('attributes'):
             dates = data.get('attributes', {})
-        elif data.get('start') and data.get('end'):
+        elif data.get('start') or data.get('end'):
             dates = data
         elif data.get('message'):
             dates = dict(json.loads(data['message'])) or {}
@@ -795,7 +799,9 @@ def get_start_and_end_from_data(data) -> tuple[datetime | None, datetime | None]
     return (None, None)
 
 
-def process_default_start_and_end(start, end) -> tuple[datetime, datetime]:
+def process_default_start_and_end(
+    start, end, interval=DEFAULT_RANGE_INTERVAL
+) -> tuple[datetime, datetime]:
     """
     Process the start and end times.
     """
@@ -804,7 +810,7 @@ def process_default_start_and_end(start, end) -> tuple[datetime, datetime]:
         end = datetime.now()
 
     if not start:
-        start = end - DEFAULT_RANGE_INTERVAL
+        start = end - interval
 
     assert isinstance(start, datetime) and isinstance(end, datetime)
     return start, end

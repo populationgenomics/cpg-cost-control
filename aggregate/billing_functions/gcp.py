@@ -14,12 +14,11 @@ Tasks:
 - Should search and update for [START_PERIOD, END_PERIOD)
 """
 
-import re
 import json
 import hashlib
 
 from datetime import datetime
-from typing import Dict, Optional
+from typing import Dict
 
 from pandas import DataFrame
 import google.cloud.bigquery as bq
@@ -66,7 +65,7 @@ def migrate_billing_data(start, end, dataset_to_gcp_map) -> int:
     """
 
     def get_topic(row):
-        return billing_row_to_topic(row, dataset_to_gcp_map)
+        return utils.billing_row_to_topic(row, dataset_to_gcp_map)
 
     migrate_rows = get_billing_data(start, end)
 
@@ -128,25 +127,6 @@ def billing_row_to_key(row) -> str:
         identifier.update(str(item).encode('utf-8'))
 
     return identifier.hexdigest()
-
-
-RE_matcher = re.compile(r'-\d+$')
-
-
-def billing_row_to_topic(row, dataset_to_gcp_map) -> Optional[str]:
-    """Convert a billing row to a dataset"""
-
-    try:
-        project_id = row['project']['id']
-    except TypeError:
-        project_id = None
-
-    topic = dataset_to_gcp_map.get(project_id, project_id)
-    if not topic:
-        return 'admin'
-
-    topic = RE_matcher.sub('', topic)
-    return topic
 
 
 def get_dataset_to_gcp_map() -> Dict[str, str]:
