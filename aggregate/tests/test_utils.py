@@ -23,7 +23,7 @@ class TestUtilsFunctions(unittest.TestCase):
         """Check the parsing of hail time"""
         time = '2022-06-09T04:59:58Z'
         expected = datetime.fromisoformat('2022-06-09T04:59:58')
-        result = parse_hail_time(time).isoformat()
+        result = parse_hail_time(time)
         self.assertEqual(result, expected)
 
     def test_date_range_iterator(self):

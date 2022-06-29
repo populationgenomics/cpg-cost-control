@@ -201,6 +201,9 @@ def parse_hail_time(time_str: str) -> datetime:
     >>> parse_hail_time('2022-06-09T04:59:58Z').isoformat()
     '2022-06-09T04:59:58'
     """
+    if isinstance(time_str, datetime):
+        return time_str
+        
     return datetime.strptime(time_str, '%Y-%m-%dT%H:%M:%SZ')
 
 

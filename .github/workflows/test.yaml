@@ -39,11 +39,22 @@ jobs:
             --ignore aggregate/local.py
 
       - name: "Run unit tests"
+        id: runtests
         run: |
           coverage run -m unittest discover
+          rc=$?
           coverage xml
+
+          echo "::set-output name=rc::$rc"
 
       - name: "Upload coverage report"
         uses: codecov/codecov-action@v2
         with:
           files: ./coverage.xml
+
+      - name: Fail if tests are not passing
+        if: ${{ steps.runtests.outputs.rc != 0 }}
+        uses: actions/github-script@v3
+        with:
+          script: |
+            core.setFailed('Unit tests failed with rc = ${{ steps.runtests.outputs.rc }}')
