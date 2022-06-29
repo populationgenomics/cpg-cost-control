@@ -35,7 +35,7 @@ import json
 import asyncio
 import hashlib
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 
 import yaml
 import requests
@@ -382,9 +382,9 @@ def billing_obj_to_key(obj: dict[str, any]) -> str:
 # Proportionate map functions
 
 
-async def generate_proportionate_map_of_dataset(
+async def generate_proportionate_maps_of_datasets(
     start: datetime, end: datetime, projects: list[str]
-) -> ProportionateMapType:
+) -> tuple[ProportionateMapType, ProportionateMapType]:
     """
     Generate a proportionate map of datasets from list of samples
     in the relevant joint-calls (< 2022-06-01) or es-index (>= 2022-06-01)
@@ -401,13 +401,16 @@ async def generate_proportionate_map_of_dataset(
             f'The datasets {", ".join(missing_projects)} were not found in SM'
         )
 
-    analyses, crams = await get_analysis_objects_and_crams_for_prop_map(
+    analyses, crams = await get_analysis_objects_and_crams_for_seqr_prop_map(
         start, end, filtered_projects
     )
-    return get_prop_map_from(analyses, crams, project_id_map=sm_pid_to_dataset)
+    seqr_map = get_seqr_hosting_prop_map_from(analyses, crams, project_id_map=sm_pid_to_dataset)
+    hail_map = get_shared_computation_prop_map(crams, project_id_map=sm_pid_to_dataset)
+
+    return seqr_map, hail_map
 
 
-async def get_analysis_objects_and_crams_for_prop_map(
+async def get_analysis_objects_and_crams_for_seqr_prop_map(
     start: datetime, end: datetime, projects: list[str]
 ):
     """
@@ -484,7 +487,7 @@ async def get_analysis_objects_and_crams_for_prop_map(
     return relevant_analysis, crams
 
 
-def get_prop_map_from(
+def get_seqr_hosting_prop_map_from(
     relevant_analyses: list[dict], crams: list[dict], project_id_map: dict[int, str]
 ) -> ProportionateMapType:
     """From prefetched analysis, compute the proprtionate_map"""
@@ -549,6 +552,69 @@ def get_prop_map_from(
 
     # We'll sort ASC, which makes it easy to find the relevant entry later
     return proportioned_datasets
+
+
+def get_shared_computation_prop_map(
+    crams: list[dict], project_id_map: dict[str | int, str], min_datetime: datetime, max_datetime: datetime
+) -> ProportionateMapType:
+    """
+    This is a bit more complex, but for hail we want to proportion any downstream
+    costs as soon as there CRAMs available. This kind of means we build up a
+    continuous map of costs (but fragmented by days).
+
+    We'll do this in three steps:
+
+    1. First assign the cram a {dataset: total_size} map on the day that cram was aligned.
+        This generates a diff of each dataset by day
+
+    2. Iterate over the days, and progressively sum up the sizes in the map
+
+    3. Iterate over the days, and proportion each day by total size of all datasets in the day
+    """
+
+    # 1.
+    by_date_diff: dict[date, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    for cram in crams:
+        tc = utils.parse_hail_time(cram.get('time_completed'))
+        project_name = project_id_map[cram['project']]
+        if tc < min_datetime:
+            # avoid computation by capping dates to minimum
+            tc = min_datetime
+        elif tc > max_datetime:
+            # skip any crams AFTER the max date
+            continue
+        by_date_diff[tc.date()][project_name] += cram['meta'].get('size')
+
+    # 2: progressively sum up the sizes, prepping for step 3
+
+    by_date_totals: list[tuple[date, dict[str, int]]] = []
+    sorted_days = list(sorted(by_date_diff.items(), key=lambda el: el[0]))
+    for idx, (dt, project_map) in enumerate(sorted_days):
+        if idx == 0:
+            by_date_totals.append((dt, project_map))
+            continue
+
+        new_project_map = {**by_date_totals[idx - 1][1]}
+
+        for pn, cram_size in project_map.items():
+            if pn not in new_project_map:
+                new_project_map[pn] = cram_size
+            else:
+                new_project_map[pn] += cram_size
+
+        by_date_totals.append((dt, new_project_map))
+
+    # 3: proportion each day
+    prop_map = []
+    for dt, project_map in by_date_totals:
+        total_size = sum(project_map.values())
+        prop_project_map = {
+            project_id: size / total_size
+            for project_id, size in project_map.items()
+        }
+        prop_map.append((datetime.combine(dt, datetime.min.time()), prop_project_map))
+
+    return prop_map
 
 
 def get_ratios_from_date(
@@ -616,13 +682,15 @@ async def main(start: datetime = None, end: datetime = None, dry_run=False):
 
     projects = get_seqr_datasets()
 
-    prop_map = await generate_proportionate_map_of_dataset(start, end, projects)
+    seqr_map, hail_map = await generate_proportionate_maps_of_datasets(
+        start, end, projects
+    )
     result = 0
 
-    result += migrate_entries_from_bq(start, end, prop_map, dry_run=dry_run)
+    result += migrate_entries_from_bq(start, end, seqr_map, dry_run=dry_run)
 
     def func_get_finalised_entries(batch):
-        return get_finalised_entries_for_batch(batch, prop_map)
+        return get_finalised_entries_for_batch(batch, hail_map)
 
     result += await utils.migrate_entries_from_hail_in_chunks(
         start=start,
