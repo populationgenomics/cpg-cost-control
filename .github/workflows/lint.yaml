@@ -25,14 +25,3 @@ jobs:
 
       - name: pre-commit
         run: pre-commit run --all-files
-
-      - name: "Run doctests"
-        run: |
-          pytest \
-            -v \
-            --doctest-modules \
-            --ignore gcp_cost_control \
-            --ignore gcp_cost_report \
-            --ignore aggregate/__main__.py \
-            --ignore aggregate/main.py \
-            --ignore aggregate/local.py
