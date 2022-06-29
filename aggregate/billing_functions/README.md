@@ -12,5 +12,6 @@ pip install -r requirements.txt -r requirements-dev.txt
 
 TBA
 
-- Probably run on some Azure equivalent of cloud functions, requests billing data for API and transfers GCP aggregate table
+- Probably run on some Azure equivalent of cloud functions,
+  requests billing data for API and transfers GCP aggregate table
 ```
