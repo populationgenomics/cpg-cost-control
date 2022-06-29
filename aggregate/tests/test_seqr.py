@@ -231,6 +231,10 @@ class TestSeqrComputationPropMap(unittest.TestCase):
         self.assertDictEqual({'DS1': 0.25, 'DS2': 0.75}, prop_map[1][1])
 
     def test_seqr_computation_prop_map_more_complex(self):
+        """
+        Test seqr_computation prop_map generation on 11 crams
+        across varous days, sizes and projects.
+        """
         project_id_map = {1: 'DS1', 2: 'DS2', 3: 'DS3'}
         project_ids = list(project_id_map.keys())
         crams_to_size = [1, 2, 3, 4]
@@ -263,6 +267,9 @@ class TestSeqrComputationPropMap(unittest.TestCase):
         self.assertAlmostEqual(0.327272, prop_map_last['DS3'], places=3)
 
     def test_seqr_computation_prop_map_condensed(self):
+        """
+        Compare a trunctated by min / max datetime to an non-condensed version
+        """
         project_id_map = {1: 'DS1', 2: 'DS2', 3: 'DS3'}
         project_ids = list(project_id_map.keys())
         crams_to_size = [1, 2, 3, 4]
@@ -292,5 +299,3 @@ class TestSeqrComputationPropMap(unittest.TestCase):
 
         self.assertDictEqual(uncondensed_prop_map[1][1], condensed_prop_map[0][1])
         self.assertDictEqual(uncondensed_prop_map[2][1], condensed_prop_map[1][1])
-
-

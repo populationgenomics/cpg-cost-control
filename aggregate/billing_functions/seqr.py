@@ -320,7 +320,7 @@ def migrate_entries_from_bq(
             if current_date is None or usage_start_time > current_date:
                 # use and abuse the
                 current_date, param_map = get_ratios_from_date(
-                    date=usage_start_time, prop_map=prop_map
+                    dt=usage_start_time, prop_map=prop_map
                 )
 
             for dataset, ratio in param_map.items():
@@ -404,8 +404,12 @@ async def generate_proportionate_maps_of_datasets(
     analyses, crams = await get_analysis_objects_and_crams_for_seqr_prop_map(
         start, end, filtered_projects
     )
-    seqr_map = get_seqr_hosting_prop_map_from(analyses, crams, project_id_map=sm_pid_to_dataset)
-    hail_map = get_shared_computation_prop_map(crams, project_id_map=sm_pid_to_dataset)
+    seqr_map = get_seqr_hosting_prop_map_from(
+        analyses, crams, project_id_map=sm_pid_to_dataset
+    )
+    hail_map = get_shared_computation_prop_map(
+        crams, project_id_map=sm_pid_to_dataset, min_datetime=start, max_datetime=end
+    )
 
     return seqr_map, hail_map
 
@@ -555,7 +559,10 @@ def get_seqr_hosting_prop_map_from(
 
 
 def get_shared_computation_prop_map(
-    crams: list[dict], project_id_map: dict[str | int, str], min_datetime: datetime, max_datetime: datetime
+    crams: list[dict],
+    project_id_map: dict[str | int, str],
+    min_datetime: datetime,
+    max_datetime: datetime,
 ) -> ProportionateMapType:
     """
     This is a bit more complex, but for hail we want to proportion any downstream
@@ -564,12 +571,12 @@ def get_shared_computation_prop_map(
 
     We'll do this in three steps:
 
-    1. First assign the cram a {dataset: total_size} map on the day that cram was aligned.
-        This generates a diff of each dataset by day
+    1. First assign the cram a {dataset: total_size} map on the day cram was aligned.
+        This generates a diff of each dataset by day.
 
-    2. Iterate over the days, and progressively sum up the sizes in the map
+    2. Iterate over the days, and progressively sum up the sizes in the map.
 
-    3. Iterate over the days, and proportion each day by total size of all datasets in the day
+    3. Iterate over the days, and proportion each day by total size in the day.
     """
 
     # 1.
@@ -609,8 +616,7 @@ def get_shared_computation_prop_map(
     for dt, project_map in by_date_totals:
         total_size = sum(project_map.values())
         prop_project_map = {
-            project_id: size / total_size
-            for project_id, size in project_map.items()
+            project_id: size / total_size for project_id, size in project_map.items()
         }
         prop_map.append((datetime.combine(dt, datetime.min.time()), prop_project_map))
 
@@ -618,7 +624,7 @@ def get_shared_computation_prop_map(
 
 
 def get_ratios_from_date(
-    date: datetime, prop_map: ProportionateMapType
+    dt: datetime, prop_map: ProportionateMapType
 ) -> tuple[datetime, dict[str, float]]:
     """
     From the prop_map, get the ratios for the applicable date.
@@ -642,16 +648,16 @@ def get_ratios_from_date(
     ...
     AssertionError: No ratio found for date 2020-01-01 00:00:00
     """
-    assert isinstance(date, datetime)
+    assert isinstance(dt, datetime)
 
     # prop_map is sorted ASC by date, so we
     # can find the latest element that is <= date
-    for dt, m in prop_map[::-1]:
+    for idt, m in prop_map[::-1]:
         # first entry BEFORE the date
-        if dt <= date:
-            return dt, m
+        if idt <= dt:
+            return idt, m
 
-    raise AssertionError(f'No ratio found for date {date}')
+    raise AssertionError(f'No ratio found for date {dt}')
 
 
 # UTIL specific to seqr billing

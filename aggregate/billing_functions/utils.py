@@ -203,7 +203,7 @@ def parse_hail_time(time_str: str) -> datetime:
     """
     if isinstance(time_str, datetime):
         return time_str
-        
+
     return datetime.strptime(time_str, '%Y-%m-%dT%H:%M:%SZ')
 
 
