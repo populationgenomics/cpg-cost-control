@@ -40,7 +40,7 @@ class TestUtilsFunctions(unittest.TestCase):
         start, end = datetime(2019, 1, 1), datetime(2019, 1, 4)
         expected = [
             (datetime(2019, 1, 1, 0, 0), datetime(2019, 1, 3, 0, 0)),
-            (datetime(2019, 1, 3, 0, 0), datetime.datetime(2019, 1, 4, 0, 0)),
+            (datetime(2019, 1, 3, 0, 0), datetime(2019, 1, 4, 0, 0)),
         ]
         self.assertEqual(expected, list(date_range_iterator(start, end)))
 
@@ -91,6 +91,9 @@ class TestUtilsFunctions(unittest.TestCase):
         """Test the parsing of incoming data json"""
 
         json_str = '{"start": "2022-01-01", "end": "2022-01-02"}'
+        json_strt, json_end = datetime.fromisoformat(
+            '2022-01-01'
+        ), datetime.fromisoformat('2022-01-02')
         strt, end = '2019-01-01', '2019-01-02'
         strt_dt, end_dt = datetime.fromisoformat(strt), datetime.fromisoformat(end)
 
@@ -98,54 +101,54 @@ class TestUtilsFunctions(unittest.TestCase):
 
         # No data
         data = None
-        self.assertEqual(get_start_and_end_from_data(data), (None, None))
+        self.assertEqual((None, None), get_start_and_end_from_data(data))
 
         # Has empty attributes
         data = {'attributes': None}
-        self.assertEqual(get_start_and_end_from_data(data), (None, None))
+        self.assertEqual((None, None), get_start_and_end_from_data(data))
         data = {'attributes': {}}
-        self.assertEqual(get_start_and_end_from_data(data), (None, None))
+        self.assertEqual((None, None), get_start_and_end_from_data(data))
 
         # Has start and/or end being empty
         data = {'start': None, 'end': None}
-        self.assertEqual(get_start_and_end_from_data(data), (None, None))
+        self.assertEqual((None, None), get_start_and_end_from_data(data))
         data = {'start': None, 'end': end}
-        self.assertEqual(get_start_and_end_from_data(data), (None, end_dt))
+        self.assertEqual((None, end_dt), get_start_and_end_from_data(data))
         data = {'start': strt, 'end': None}
-        self.assertEqual(get_start_and_end_from_data(data), (strt_dt, None))
+        self.assertEqual((strt_dt, None), get_start_and_end_from_data(data))
 
         # Empty or meaningless message
         data = {'message': 'Hi I am a message'}
-        self.assertEqual(get_start_and_end_from_data(data), (None, None))
+        self.assertEqual((None, None), get_start_and_end_from_data(data))
         data = {'message': None}
-        self.assertEqual(get_start_and_end_from_data(data), (None, None))
+        self.assertEqual((None, None), get_start_and_end_from_data(data))
 
         # Valid data #
 
         # Has valid attributes and attributes takes priority
         data = {'attributes': {'start': strt, 'end': '2019-01-02'}}
-        self.assertEqual(get_start_and_end_from_data(data), (strt_dt, end_dt))
+        self.assertEqual((strt_dt, end_dt), get_start_and_end_from_data(data))
         data = {
             'attributes': {'start': strt, 'end': '2019-01-02'},
             'message': 'Hi I am a message',
         }
-        self.assertEqual(get_start_and_end_from_data(data), (strt_dt, end_dt))
+        self.assertEqual((strt_dt, end_dt), get_start_and_end_from_data(data))
         data = {'attributes': {'start': strt, 'end': '2019-01-02'}, 'message': json_str}
-        self.assertEqual(get_start_and_end_from_data(data), (strt_dt, end_dt))
+        self.assertEqual((strt_dt, end_dt), get_start_and_end_from_data(data))
         data = {
             'attributes': {'start': strt, 'end': '2019-01-02'},
             'start': '2020-01-01',
             'end': '2020-01-02',
         }
-        self.assertEqual(get_start_and_end_from_data(data), (strt_dt, end_dt))
+        self.assertEqual((strt_dt, end_dt), get_start_and_end_from_data(data))
 
         # Has valid start and end
         data = {'start': strt, 'end': '2019-01-02'}
-        self.assertEqual(get_start_and_end_from_data(data), (strt_dt, end_dt))
+        self.assertEqual((strt_dt, end_dt), get_start_and_end_from_data(data))
 
         # Has a valid json message
         data = {'message': json_str}
-        self.assertEqual(get_start_and_end_from_data(data), (strt_dt, end_dt))
+        self.assertEqual((json_strt, json_end), get_start_and_end_from_data(data))
 
     def test_process_default_start_and_end(self):
         """Test the default start and end"""
@@ -153,11 +156,14 @@ class TestUtilsFunctions(unittest.TestCase):
         # No data
         interval = timedelta(days=2)
         start, end = (None, None)
-        strt_expected, end_expected = (datetime.now(), datetime.now() - interval)
-        self.assertAlmostEqual(
-            process_default_start_and_end(start, end, interval=interval),
-            (strt_expected, end_expected),
+        strt_expected, end_expected = (
+            datetime.now().replace(microsecond=0) - interval,
+            datetime.now().replace(microsecond=0),
         )
+        a, b = process_default_start_and_end(start, end, interval=interval)
+        a = a.replace(microsecond=0)
+        b = b.replace(microsecond=0)
+        self.assertEqual((strt_expected, end_expected), (a, b))
 
         # End only
         start, end = (None, datetime.fromisoformat('2019-01-02'))

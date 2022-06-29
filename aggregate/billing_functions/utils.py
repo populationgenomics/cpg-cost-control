@@ -786,7 +786,10 @@ def get_start_and_end_from_data(data) -> tuple[datetime | None, datetime | None]
         elif data.get('start') or data.get('end'):
             dates = data
         elif data.get('message'):
-            dates = dict(json.loads(data['message'])) or {}
+            try:
+                dates = dict(json.loads(data['message']))
+            except ValueError:
+                dates = {}
 
         logger.info(f'data: {data}, dates: {dates}')
 
@@ -808,12 +811,14 @@ def process_default_start_and_end(
     """
     Process the start and end times.
     """
-    if not end:
+    if not end and not start:
         # start of today
         end = datetime.now()
-
-    if not start:
         start = end - interval
+    elif not start:
+        start = end - interval
+    elif not end:
+        end = start + interval
 
     assert isinstance(start, datetime) and isinstance(end, datetime)
     return start, end
