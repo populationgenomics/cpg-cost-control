@@ -1,4 +1,4 @@
-name: Lint + Doc Test
+name: Lint
 on: push
 
 jobs:
