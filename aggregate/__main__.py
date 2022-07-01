@@ -211,40 +211,40 @@ def create_cloud_function(
         ),
     )
 
-    # TODO: Re-enable notifications
-    # filter_string = fxn.name.apply(
-    #     lambda fxn_name: f"""
-    #         resource.type="cloud_function"
-    #         AND resource.labels.function_name="{fxn_name}"
-    #         AND severity >= WARNING
-    #     """
-    # )
-    #
+    # Slack notifications
+    filter_string = fxn.name.apply(
+        lambda fxn_name: f"""
+            resource.type="cloud_function"
+            AND resource.labels.function_name="{fxn_name}"
+            AND severity >= WARNING
+        """
+    )
+
     # Create the Cloud Function's event alert
-    # alert_condition = gcp.monitoring.AlertPolicyConditionArgs(
-    #     condition_matched_log=(
-    #         gcp.monitoring.AlertPolicyConditionConditionMatchedLogArgs(
-    #             filter=filter_string,
-    #         )
-    #     ),
-    #     display_name='Function warning/error',
-    # )
-    # alert_rate = gcp.monitoring.AlertPolicyAlertStrategyArgs(
-    #     notification_rate_limit=(
-    #         gcp.monitoring.AlertPolicyAlertStrategyNotificationRateLimitArgs(
-    #             period='300s'
-    #         )
-    #     ),
-    # )
-    # alert_policy = gcp.monitoring.AlertPolicy(
-    #     f'{name}-billing-function-error-alert',
-    #     display_name=f'{name.capitalize()} Billing Function Error Alert',
-    #     combiner='OR',
-    #     notification_channels=[slack_channel],
-    #     conditions=[alert_condition],
-    #     alert_strategy=alert_rate,
-    #     opts=pulumi.ResourceOptions(depends_on=[fxn]),
-    # )
+    alert_condition = gcp.monitoring.AlertPolicyConditionArgs(
+        condition_matched_log=(
+            gcp.monitoring.AlertPolicyConditionConditionMatchedLogArgs(
+                filter=filter_string,
+            )
+        ),
+        display_name='Function warning/error',
+    )
+    alert_rate = gcp.monitoring.AlertPolicyAlertStrategyArgs(
+        notification_rate_limit=(
+            gcp.monitoring.AlertPolicyAlertStrategyNotificationRateLimitArgs(
+                period='300s'
+            )
+        ),
+    )
+    alert_policy = gcp.monitoring.AlertPolicy(
+        f'{name}-billing-function-error-alert',
+        display_name=f'{name.capitalize()} Billing Function Error Alert',
+        combiner='OR',
+        notification_channels=[slack_channel],
+        conditions=[alert_condition],
+        alert_strategy=alert_rate,
+        opts=pulumi.ResourceOptions(depends_on=[fxn]),
+    )
     alert_policy = None
 
     return fxn, trigger, alert_policy
