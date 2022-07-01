@@ -63,7 +63,7 @@ jobs:
         run: pip install -r requirements.txt -r requirements-dev.txt
         working-directory: aggregate
 
-      - name: Pulumi
+      - name: Pulumi - Aggregate Billing
         uses: pulumi/actions@v3
         with:
           command: up
@@ -71,3 +71,12 @@ jobs:
           refresh: true
           work-dir: aggregate
           stack-name: billing_aggregate
+
+      - name: Pulumi - Monthly Upload
+        uses: pulumi/actions@v3
+        with:
+          command: up
+          upsert: false
+          refresh: true
+          work-dir: aggregate
+          stack-name: monthly_upload

@@ -62,6 +62,10 @@ def main():
     config_values = {
         'REGION': gcp_opts.get('region'),
         'PROJECT': gcp_opts.get('project'),
+        'NAME': opts.get('name'),
+        'CRON': opts.get('cron'),
+        'MEMORY': opts.get('memory'),
+        'TIMEOUT': opts.get('timeout'),
         'FUNCTIONS': opts.get('functions'),
         'SLACK_CHANNEL': opts.get('slack_channel'),
         'GCP_SERVICE_ACCOUNT': opts.get('service_account'),
@@ -70,7 +74,7 @@ def main():
     }
 
     # Set environment variable to the correct project
-    name = 'aggregate-billing'
+    name = config_values['NAME']
     bucket_name = f'{name}-{config_values["PROJECT"]}'
 
     # Start by enabling all cloud function services
@@ -120,7 +124,7 @@ def main():
             topic_name=pubsub.id,
             data=b64encode_str('Run the functions'),
         ),
-        schedule='0 8 * * *',
+        schedule=config_values['CRON'],
         project=config_values['PROJECT'],
         region=config_values['REGION'],
         time_zone='Australia/Sydney',
@@ -199,8 +203,8 @@ def create_cloud_function(
         build_environment_variables=env,
         environment_variables=env,
         service_account_email=service_account,
-        available_memory_mb=1024,
-        timeout=540,
+        available_memory_mb=config_values['MEMORY'],
+        timeout=config_values['TIMEOUT'],
         opts=pulumi.ResourceOptions(
             depends_on=[
                 pubsub_topic,

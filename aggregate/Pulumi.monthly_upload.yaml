@@ -1,14 +1,11 @@
 config:
-  opts:name: aggregate-billing
+  opts:name: monthly-upload
   opts:service_account: aggregate-billing@billing-admin-290403.iam.gserviceaccount.com
   opts:functions:
-    - gcp
-    - hail
-    - seqr
-  opts:memory: 1024
+    - monthly_upload
+  opts:memory: 128
   opts:timeout: 540
-  opts:cron: '0 0 8 * * ? *'
-  opts:destination: billing-admin-290403.billing_aggregate.aggregate
+  opts:cron: '0 0 8 3 * ? *'
   opts:slack_channel: '#software-alerts'
 
   gcp:project: billing-admin-290403
