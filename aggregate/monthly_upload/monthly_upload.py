@@ -1,7 +1,7 @@
 """A Cloud Function to update the status of genomic samples."""
 
-import os
 import json
+import asyncio
 import logging
 
 from datetime import datetime
@@ -11,27 +11,30 @@ import google.cloud.bigquery as bq
 from flask import abort
 from pandas import DataFrame
 
-# from airtable import Airtable
+from airtable import Airtable
 from google.cloud import secretmanager
-
-# from requests.exceptions import HTTPError
-
+from requests.exceptions import HTTPError
 
 BQ_CLIENT = bq.Client()
-GCP_MONTHLY_BILLING_BQ_TABLE = (
-    'billing-admin-290403.billing_aggregate.aggregate_monthly_cost'
-)
+GCP_PROJECT = 'billing-admin-290403'
+GCP_MONTHLY_BILLING_BQ_TABLE = f'{GCP_PROJECT}.billing_aggregate.aggregate_monthly_cost'
 
 secret_manager = secretmanager.SecretManagerServiceClient()
 
 
-def update_sample_status(data, _):  # pylint: disable=R0911
+def main(data, _):
+    """Main function"""
+    loop = asyncio.get_event_loop() or asyncio.new_event_loop()
+    loop.run_until_complete(update_sample_status(data))
+
+
+async def update_sample_status(data):
     """Main entry point for the Cloud Function."""
 
     if not data.get('attributes'):
         return abort(405)
 
-    request_json = json.loads(data.get('attributes'))
+    request_json = data.get('attributes')
 
     # Verify input parameters.
     year = request_json.get('year')
@@ -45,9 +48,8 @@ def update_sample_status(data, _):  # pylint: disable=R0911
     logging.info(f'Processing request: {request_json}')
 
     # Fetch the per-project configuration from the Secret Manager.
-    gcp_project = os.getenv('GCP_PROJECT')
     secret_name = (
-        f'projects/{gcp_project}/secrets'
+        f'projects/{GCP_PROJECT}/secrets'
         '/billing-airtable-monthly-upload-apikeys/versions/latest'
     )
     config_str = secret_manager.access_secret_version(
@@ -66,7 +68,7 @@ def update_sample_status(data, _):  # pylint: disable=R0911
     if not base_key or not table_name or not api_key:
         return abort(500)
 
-    return airtable_overwrite_yearly_billing_month(
+    await airtable_overwrite_yearly_billing_month(
         year, month, base_key, table_name, api_key
     )
 
@@ -80,7 +82,7 @@ def get_billing_data(year: str, month: str) -> DataFrame:
     _query = f"""
         SELECT * FROM `{GCP_MONTHLY_BILLING_BQ_TABLE}`
         WHERE month = @yearmonth
-        ORDER BY cost DESC
+        ORDER BY topic
     """
 
     yearmonth = year + month
@@ -98,23 +100,61 @@ def get_billing_data(year: str, month: str) -> DataFrame:
     return migrate_rows
 
 
-def airtable_overwrite_yearly_billing_month(year, month, base_key, table_name, api_key):
+async def airtable_overwrite_yearly_billing_month(
+    year, month, base_key, table_name, api_key
+):
     """
     Retrieve and upload the montly billing info from GCP and upload to airtable
     Return success or failure status
     """
 
-    print(year, month, base_key, table_name, api_key)
+    airtable = Airtable(base_key, table_name, api_key)
+    airtable.API_LIMIT = 0.0001
+    data = get_billing_data(year, month)
+    data['cost'].fillna(0)
 
-    # Update the entry.
-    # airtable = Airtable(base_key, table_name, api_key)
-    # try:
-    #     response = airtable.update_by_field()
-    # except HTTPError as err:  # Invalid status enum.
-    #     logging.error(err)
-    #     return abort(400)
+    # Insert any missing topics
+    topics = data['topic'].unique()
+    at_topics = {r['fields']['Topic'] for r in airtable.get_all()}
+    missing = [{'Topic': t} for t in topics if t not in at_topics]
+    airtable.batch_insert(missing)
 
-    # if not response:  # Sample not found.
-    #     return abort(404)
+    # Update the field values
+    topic_calls = [airtable_upsert_topic_row(airtable, data, t) for t in topics]
+    await asyncio.gather(*topic_calls)
 
     return ('', 204)
+
+
+async def airtable_upsert_topic_row(airtable: Airtable, df: DataFrame, topic: str):
+    """
+    Mangle the data into the correct format from df to suite the Airtable API
+    """
+    df = df.loc[df['topic'] == topic, :].copy()
+
+    def field_name(row):
+        month = convert_date(row['month'], '%Y%m', '%B')
+        return f'{month} ({row["cost_category"]})'
+
+    # Create airtable field names, then index on them
+    df['field'] = df.apply(field_name, axis=1)
+    df = df.set_index('field')
+    fields = json.loads(df['cost'].to_json())
+
+    response = airtable.update_by_field('Topic', topic, fields)
+
+    if not response:
+        raise HTTPError(f'Could not update topic {topic}')
+
+    return response
+
+
+def convert_date(date: datetime, frmt: str, frmt_to: str):
+    """Convert date string format"""
+    return datetime.strptime(date, frmt).strftime(frmt_to)
+
+
+if __name__ == '__main__':
+    YEAR = '2022'
+    MONTH = '04'
+    main({'attributes': {'year': YEAR, 'month': MONTH}}, None)
