@@ -15,23 +15,23 @@ through a service account key.
 
 ## Set up the Cloud Function
 
-1. Create a GCP project named `sample-metadata`.
+1. Select the GCP billing project.
 1. Add a service account for _running_ the Cloud Function.
-1. In the Secret Manager, create a secret `update-sample-status-config`, with
-   a JSON config as follows, where `apiKey` corresponds to the Airtable account
+1. In the Secret Manager, create a secret `billing-airtable-monthly-upload-apikeys`,
+   with a JSON config as follows, where `apiKey` corresponds to the Airtable account
    that should be used for the updates. The corresponding tables must have
-   "Sample ID" and "Status" columns.
+   format matching [2022 Example](https://airtable.com/app62isJvsSz0ziWT/tblqQkcgXt6fdsgj5/viwtxRpnYQNwXPVUw?blocks=hide)
 
    ```json
    {
-     "project1": {
+     "2022": {
        "baseKey": "baseasdf42",
-       "tableName": "Sample table",
+       "tableName": "2022 Invoice By Topic",
        "apiKey": "keyadjlas323"
      },
-     "project2": {
+     "2023": {
        "baseKey": "baseasdlj3",
-       "tableName": "Another table",
+       "tableName": "2023 Invoice By Topic",
        "apiKey": "keyajksdl231"
      }
    }
@@ -39,19 +39,6 @@ through a service account key.
 
 1. Grant the Cloud Function service account the
    _Secret Manager Secret Accessor_ role for the secret.
-1. Deploy the Cloud Function, replacing `$PROJECT`, `$REGION`, and
-   `$SERVICE_ACCOUNT` accordingly. Do _not_ allow unauthenticated
-   invocations.
-
-   ```shell
-   gcloud config set project $PROJECT
-   gcloud functions deploy update_sample_status --runtime python37 \
-     --region=$REGION --trigger-http --service-account $SERVICE_ACCOUNT
-   ```
-
-1. Create a service account for _invoking_ the Cloud Function.
-1. Under the newly created Cloud Function, grant the invoker service account
-   the _Cloud Functions Invoker_ role.
 
 ## Invoking the Cloud Function
 
@@ -65,5 +52,5 @@ TOKEN=$(gcloud auth print-identity-token)
 curl -X PUT https://$REGION-$PROJECT.cloudfunctions.net/update_sample_status \
     -H "Authorization: bearer $TOKEN" \
     -H "Content-Type:application/json" \
-    -d '{"project": "project1", "sample": "HG00123", "status": "Sequencing started"}'
+    -d '{"year": "2022", "month": "05"}'
 ```
