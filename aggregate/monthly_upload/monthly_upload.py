@@ -18,14 +18,6 @@ from requests.exceptions import HTTPError
 BQ_CLIENT = bq.Client()
 GCP_PROJECT = 'billing-admin-290403'
 GCP_MONTHLY_BILLING_BQ_TABLE = f'{GCP_PROJECT}.billing_aggregate.aggregate_monthly_cost'
-GDRIVE_FOLDER = (
-    'https://drive.google.com/drive/folders/'
-    '1-LCWLca0FLIigBoJWM8KQjaTT7pObUtE?usp=sharing'
-)
-DATASTUDIO_REPORT = (
-    'https://datastudio.google.com/reporting/'
-    'bcf70c6e-c736-437c-ad47-0d4fa9d0d28e/page/Y4oUC'
-)
 
 secret_manager = secretmanager.SecretManagerServiceClient()
 
