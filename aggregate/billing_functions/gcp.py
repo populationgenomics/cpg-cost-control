@@ -1,5 +1,5 @@
 """
-Cloud function that runs {TBA} that synchronises a portion of data from:
+Cloud function that runs once a month that synchronises a portion of data from:
 
 FROM:   billing-admin-290403.billing.gcp_billing_export_v1_01D012_20A6A2_CBD343
 TO:     billing-admin-290403.billing_aggregate.aggregate
@@ -45,7 +45,7 @@ def from_request(request):
     main(start, end)
 
 
-def from_pubsub(data=None, _=None):
+def from_pubsub(data, _):
     """
     From pubsub message, get start and end time if present
     """
@@ -58,28 +58,30 @@ def from_pubsub(data=None, _=None):
 #################
 
 
-def migrate_billing_data(start, end, dataset_to_gcp_map) -> int:
+def migrate_billing_data(start, end, dataset_to_topic) -> int:
     """
-    Get the billing date in the time period
+    Gets the billing date in the time period
     Filter out any rows that aren't in the allowed project ids
+    :return: The number of migrated rows
     """
 
     def get_topic(row):
-        return utils.billing_row_to_topic(row, dataset_to_gcp_map)
+        return utils.billing_row_to_topic(row, dataset_to_topic)
 
     migrate_rows = get_billing_data(start, end)
 
-    if len(migrate_rows) == 0:
+    if not migrate_rows:
         logger.info('No rows to migrate')
         return 0
 
-    # Add id and dataset to the row
+    # Add id and topic to the row
     migrate_rows = migrate_rows.drop(columns=['billing_account_id'])
     migrate_rows.insert(0, 'topic', migrate_rows.apply(get_topic, axis=1))
     migrate_rows.insert(0, 'id', migrate_rows.apply(billing_row_to_key, axis=1))
 
+    table_schema = utils.get_bq_schema_json()
     result = utils.insert_dataframe_rows_in_table(
-        utils.GCP_AGGREGATE_DEST_TABLE, migrate_rows
+        utils.GCP_AGGREGATE_DEST_TABLE, table_schema, migrate_rows
     )
 
     return result
@@ -129,7 +131,7 @@ def billing_row_to_key(row) -> str:
     return identifier.hexdigest()
 
 
-def get_dataset_to_gcp_map() -> Dict[str, str]:
+def get_dataset_to_topic_map() -> Dict[str, str]:
     """Get the server-config from the secret manager"""
     server_config = json.loads(
         utils.read_secret(utils.ANALYSIS_RUNNER_PROJECT_ID, 'server-config')
@@ -146,14 +148,18 @@ def main(start: datetime = None, end: datetime = None) -> int:
     """Main body function"""
     interval_iterator = utils.get_date_intervals_for(start, end)
 
-    # Get the dataset to GCP project map
-    dataset_to_gcp_map = get_dataset_to_gcp_map()
+    # Storing topic map means we don't repeatedly call to access the topic
+    # data mapping for each batch
+    dataset_to_topic_map = get_dataset_to_topic_map()
 
     # Migrate the data in batches
+    # This is because depending on the start-end interval all of the billing
+    # data may not be able to be held in memory during the migration
+    # Memory is particularly limited for cloud functions
     result = 0
-    for itrvl_start, itrvl_end in interval_iterator:
-        logger.info(f'Migrating data from {itrvl_start} to {itrvl_end}')
-        result += migrate_billing_data(itrvl_start, itrvl_end, dataset_to_gcp_map)
+    for begin, finish in interval_iterator:
+        logger.info(f'Migrating data from {begin} to {finish}')
+        result += migrate_billing_data(begin, finish, dataset_to_topic_map)
 
     logger.info(f'Migrated a total of {result} rows')
 

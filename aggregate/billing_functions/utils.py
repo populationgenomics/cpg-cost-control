@@ -581,8 +581,13 @@ def insert_new_rows_in_table(
     return inserts
 
 
-def insert_dataframe_rows_in_table(table: str, df: pd.DataFrame):
-    """Insert new rows from dataframe into a table"""
+def insert_dataframe_rows_in_table(table: str, schema: dict, df: pd.DataFrame):
+    """
+    Insert new rows from dataframe into a table using the provided schema
+
+    Note: the schema should be the schema from the gcp table name provided and the df
+    should match this exactly for inserting to work.
+    """
 
     _query = f"""
         SELECT id FROM @table
@@ -605,12 +610,11 @@ def insert_dataframe_rows_in_table(table: str, df: pd.DataFrame):
 
     # Insert the new rows
     project_id = table.split('.')[0]
-    table_schema = get_bq_schema_json()
 
     df.to_gbq(
         table,
         project_id=project_id,
-        table_schema=table_schema,
+        table_schema=schema,
         if_exists='append',
         chunksize=DEFAULT_BQ_CHUNK_SIZE,
     )
