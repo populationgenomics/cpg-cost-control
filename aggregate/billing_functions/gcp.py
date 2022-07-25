@@ -78,9 +78,7 @@ def migrate_billing_data(start, end, dataset_to_gcp_map) -> int:
     migrate_rows.insert(0, 'topic', migrate_rows.apply(get_topic, axis=1))
     migrate_rows.insert(0, 'id', migrate_rows.apply(billing_row_to_key, axis=1))
 
-    result = utils.insert_dataframe_rows_in_table(
-        utils.GCP_AGGREGATE_DEST_TABLE, migrate_rows
-    )
+    result = utils.upsert_aggregated_dataframe_into_bigquery(df=migrate_rows)
 
     return result
 

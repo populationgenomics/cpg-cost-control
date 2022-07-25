@@ -149,7 +149,7 @@ async def main(
     start, end = utils.process_default_start_and_end(start, end)
 
     # result = await migrate_hail_data(start, end, hail_token, dry_run=dry_run)
-    result = await utils.migrate_entries_from_hail_in_chunks(
+    result = await utils.process_entries_from_hail_in_chunks(
         start=start,
         end=end,
         func_get_finalised_entries_for_batch=get_finalised_entries_for_batch,

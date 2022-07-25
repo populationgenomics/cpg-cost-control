@@ -361,7 +361,7 @@ def migrate_entries_from_bq(
             )
         )
 
-        result += utils.insert_new_rows_in_table(
+        result += utils.upsert_rows_into_bigquery(
             table=utils.GCP_AGGREGATE_DEST_TABLE,
             objs=entries,
             dry_run=dry_run,
@@ -698,7 +698,7 @@ async def main(start: datetime = None, end: datetime = None, dry_run=False):
     def func_get_finalised_entries(batch):
         return get_finalised_entries_for_batch(batch, hail_map)
 
-    result += await utils.migrate_entries_from_hail_in_chunks(
+    result += await utils.process_entries_from_hail_in_chunks(
         start=start,
         end=end,
         billing_project=SEQR_HAIL_BILLING_PROJECT,
