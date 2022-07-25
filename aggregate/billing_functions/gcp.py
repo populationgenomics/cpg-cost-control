@@ -19,8 +19,9 @@ import hashlib
 
 from datetime import datetime
 from typing import Dict
-
 from pandas import DataFrame
+
+from cpg_utils.cloud import read_secret
 import google.cloud.bigquery as bq
 
 try:
@@ -131,7 +132,7 @@ def billing_row_to_key(row) -> str:
 def get_dataset_to_topic_map() -> Dict[str, str]:
     """Get the server-config from the secret manager"""
     server_config = json.loads(
-        utils.read_secret(utils.ANALYSIS_RUNNER_PROJECT_ID, 'server-config')
+        read_secret(utils.ANALYSIS_RUNNER_PROJECT_ID, 'server-config')
     )
     return {v['projectId']: k for k, v in server_config.items()}
 

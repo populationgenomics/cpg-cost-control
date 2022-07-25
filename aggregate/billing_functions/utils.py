@@ -19,7 +19,7 @@ import aiohttp
 import pandas as pd
 import google.cloud.bigquery as bq
 
-from google.cloud import secretmanager
+from cpg_utils.cloud import read_secret
 from google.api_core.exceptions import ClientError
 
 
@@ -872,20 +872,6 @@ def get_date_intervals_for(
     """
     s, e = process_default_start_and_end(start, end)
     return date_range_iterator(s, e, intv=interval)
-
-
-def read_secret(project_id: str, secret_name: str) -> str | None:
-    """Reads the latest version of a GCP Secret Manager secret.
-
-    Returns None if the secret doesn't exist."""
-
-    secret_manager = secretmanager.SecretManagerServiceClient()
-    secret_path = secret_manager.secret_path(project_id, secret_name)
-
-    response = secret_manager.access_secret_version(
-        request={'name': f'{secret_path}/versions/latest'}
-    )
-    return response.payload.data.decode('UTF-8')
 
 
 def get_hail_entry(
