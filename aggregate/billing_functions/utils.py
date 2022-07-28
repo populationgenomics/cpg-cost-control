@@ -116,6 +116,7 @@ async def async_retry_transient_get_json_request(
     *args,
     attempts=5,
     session=None,
+    timeout_seconds=60,
     **kwargs,
 ):
     """
@@ -125,7 +126,12 @@ async def async_retry_transient_get_json_request(
     async def inner_block(session):
         for attempt in range(1, attempts + 1):
             try:
-                async with session.get(url, *args, **kwargs) as resp:
+                async with session.get(
+                    url,
+                    timeout=aiohttp.ClientTimeout(total=timeout_seconds),
+                    *args,
+                    **kwargs,
+                ) as resp:
                     resp.raise_for_status()
                     j = await resp.json()
                     return j
