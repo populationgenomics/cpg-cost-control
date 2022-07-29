@@ -1,0 +1,11 @@
+aiohttp==3.8.1
+cpg-utils==2.5.1
+db-dtypes==1.0.0
+google-api-python-client==2.10.0
+google-cloud-secret-manager==2.0.0
+google-cloud-bigquery==3.0.1
+pandas==1.4.2
+pandas-gbq==0.17.4
+sample-metadata>=4.9.4
+slack==0.0.2
+pyyaml==5.4.1

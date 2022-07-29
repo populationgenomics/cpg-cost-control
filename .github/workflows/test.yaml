@@ -1,0 +1,60 @@
+name: Unittests
+on: push
+
+jobs:
+  run-unittests:
+    runs-on: ubuntu-latest
+    env:
+      DOCKER_BUILDKIT: 1
+      BUILDKIT_PROGRESS: plain
+      CLOUDSDK_CORE_DISABLE_PROMPTS: 1
+    defaults:
+      run:
+        shell: bash -l {0}
+    steps:
+      - uses: actions/checkout@main
+
+      - uses: actions/setup-python@v2
+        with:
+          python-version: '3.10'
+
+      - name: Setup build env
+        run: |
+          set -euxo pipefail
+
+          pip install -r aggregate/requirements-dev.txt
+          pip install -r aggregate/requirements.txt
+          pip install -r gcp_cost_control/requirements.txt
+          pip install -r gcp_cost_report/requirements.txt
+
+      - name: "Run doctests"
+        run: |
+          pytest \
+            -v \
+            --doctest-modules \
+            --ignore gcp_cost_control \
+            --ignore gcp_cost_report \
+            --ignore aggregate/__main__.py \
+            --ignore aggregate/main.py \
+            --ignore aggregate/local.py
+
+      - name: "Run unit tests"
+        id: runtests
+        run: |
+          coverage run -m unittest discover
+          rc=$?
+          coverage xml
+
+          echo "::set-output name=rc::$rc"
+
+      - name: "Upload coverage report"
+        uses: codecov/codecov-action@v2
+        with:
+          files: ./coverage.xml
+
+      - name: Fail if tests are not passing
+        if: ${{ steps.runtests.outputs.rc != 0 }}
+        uses: actions/github-script@v3
+        with:
+          script: |
+            core.setFailed('Unit tests failed with rc = ${{ steps.runtests.outputs.rc }}')

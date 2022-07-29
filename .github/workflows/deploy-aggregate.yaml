@@ -1,0 +1,72 @@
+# This workflow will deploy source code on Cloud Run when a commit is pushed to the main branch
+#
+# Overview:
+#
+# 1. Authenticate to Google Cloud
+# 2. Deploy it to Cloud Run
+#
+# To configure this workflow:
+#
+# 1. Ensure the required IAM permissions are granted to the Service Account
+#
+#    BigQuery Data Editor
+#    BigQuery Job User
+#    BigQuery Read Session User
+#    Editor
+#
+# 2. Create the pulumi account with the service account email. Copy the
+#    PULUMI_ACCESS_TOKEN for that account and the GCP_CREDENTIALS (json)
+#    as GitHub secrets in this repo
+#
+# 3. Add the SLACK_AUTH_TOKEN that is used for the pulumi deploy into a GitHub secret
+#    Make sure that it has sufficient permissions for the slack channel you want the
+#    software alerts to go to. See opts:slack_channel in the Pulumi config file for
+#    what channel alerts will go to.
+#
+# 4. Set the gcp options for project, region the gcp service account email as well as
+#    slack channel in the pulumi config file Pulumi.billing_aggregate.yaml
+#
+
+name: Billing Aggregation Deploy
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
+  SLACK_AUTH_TOKEN: ${{ secrets.SLACK_AUTH_TOKEN }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Google Auth
+        id: auth
+        uses: "google-github-actions/auth@v0"
+        with:
+          credentials_json: "${{ secrets.GCP_CREDENTIALS }}"
+          project_id: billing-admin-290403
+
+      - name: Python
+        uses: actions/setup-python@v3
+        with:
+          python-version: 3.10.4
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt -r requirements-dev.txt
+        working-directory: aggregate
+
+      - name: Pulumi
+        uses: pulumi/actions@v3
+        with:
+          command: up
+          upsert: false
+          refresh: true
+          work-dir: aggregate
+          stack-name: billing_aggregate

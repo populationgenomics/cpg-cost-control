@@ -1,5 +1,9 @@
 # GCP cost control
 
+[![Billing Aggregation Deploy](https://github.com/populationgenomics/gcp-cost-control/actions/workflows/deploy-aggregate.yaml/badge.svg)](https://github.com/populationgenomics/gcp-cost-control/actions/workflows/deploy-aggregate.yaml)
+
+[![Billing Aggregation Codecov](https://codecov.io/github/populationgenomics/gcp-cost-control/coverage.svg?branch=master)](https://codecov.io/github/populationgenomics/gcp-cost-control?branch=master)
+
 This repository contains a Cloud Function that handles GCP billing budget
 notifications, inspired by the
 [official documentation](https://cloud.google.com/billing/docs/how-to/notify#cap_disable_billing_to_stop_usage),
@@ -16,7 +20,8 @@ notifications for _all_ projects.
 
 ## Set up the Cloud Function
 
-1. Create a GCP project named for billing administration, e.g. called `billing-admin-290403` below.
+1. Create a GCP project named for billing administration,
+   e.g. called `billing-admin-290403` below.
 1. Enable the
    [Cloud Billing API](https://console.developers.google.com/apis/library/cloudbilling.googleapis.com)
    for the project.
@@ -56,10 +61,15 @@ Create a separate budget for each project that you'd like to cap billing for:
 1. Go to "Billing".
 1. Go to "Budgets & Alerts".
 1. Click "Create Budget".
-1. Set the name of the budget identical to the _project ID_ (not the project name!) of your project.
+1. Set the name of the budget identical to the _project ID_ (not the project name!)
+   of your project.
 1. Select your new project from the drop-down "Projects".
 1. In the "Amount" section, set a non-zero target amount.
-1. In the "Actions" section, select "Connect a Pub/Sub topic to this budget". In the dropdown menu, select the topic `projects/billing-admin-290403/topics/budget-notifications`. If you can't see the topic, click on "Switch project" in that dropdown menu and select `billing-admin-290403`, and you should be able to see the topic.
+1. In the "Actions" section, select "Connect a Pub/Sub topic to this budget".
+   In the dropdown menu, select the topic
+   `projects/billing-admin-290403/topics/budget-notifications`. If you can't
+   see the topic, click on "Switch project" in that dropdown menu and select
+   `billing-admin-290403`, and you should be able to see the topic.
 1. Click Finish.
 
 ## Testing
@@ -84,8 +94,8 @@ issues, check the logs for the `gcp-cost-control` Cloud Function.
 
 ## Daily cost reports
 
-The [gcp_cost_report](gcp_cost_report/main.py) Cloud Function can be used to get a
-daily per-project cost report in Slack.
+The [gcp_cost_report](gcp_cost_report/main.py) Cloud Function can be used
+to get a daily per-project cost report in Slack.
 
 1. Set up [Cloud Billing data export to BigQuery](https://cloud.google.com/billing/docs/how-to/export-data-bigquery)
    in the `billing-admin-290403` project. Replace `$BIGQUERY_BILLING_TABLE` below
