@@ -117,7 +117,7 @@ def main():
     # Create one pubsub to be triggered by the cloud scheduler
     pubsub = gcp.pubsub.Topic(f'{name}-topic', project=config_values['PROJECT'])
 
-    # Create a cron job to run the function every day at midnight.s
+    # Create a cron job to run the function every day at midnight.
     job = gcp.cloudscheduler.Job(
         f'{name}-job',
         pubsub_target=gcp.cloudscheduler.JobPubsubTargetArgs(
@@ -133,7 +133,7 @@ def main():
 
     pulumi.export('cron_job', job.id)
 
-    # Create slack notificaiton channel for all functions
+    # Create slack notification channel for all functions
     # Use cli command below to retrieve the required 'labels'
     # $ gcloud beta monitoring channel-descriptors describe slack
     slack_channel = gcp.monitoring.NotificationChannel(

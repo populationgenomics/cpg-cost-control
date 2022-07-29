@@ -14,8 +14,8 @@
 #    BigQuery Read Session User
 #    Editor
 #
-# 2. Create the pulumi account with the service account email then copy the
-#    PULUMI_ACCESS_TOKEN for that account and the GCP_CREDENTIALS (json) are saved
+# 2. Create the pulumi account with the service account email. Copy the
+#    PULUMI_ACCESS_TOKEN for that account and the GCP_CREDENTIALS (json)
 #    as GitHub secrets in this repo
 #
 # 3. Add the SLACK_AUTH_TOKEN that is used for the pulumi deploy into a GitHub secret

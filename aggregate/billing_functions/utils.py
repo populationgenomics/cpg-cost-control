@@ -19,7 +19,7 @@ import aiohttp
 import pandas as pd
 import google.cloud.bigquery as bq
 
-from google.cloud import secretmanager
+from cpg_utils.cloud import read_secret
 from google.api_core.exceptions import ClientError
 
 
@@ -51,9 +51,12 @@ logger.info(f'GCP_AGGREGATE_DEST_TABLE: {GCP_AGGREGATE_DEST_TABLE}')
 
 IS_PRODUCTION = os.getenv('PRODUCTION') in ('1', 'true', 'yes')
 
-# 10% overhead
-HAIL_SERVICE_FEE = 0.05
-DEFAULT_BQ_CHUNK_SIZE = 9000
+# mfranklin 2022-07-25: dropping to 0% service-fee.
+HAIL_SERVICE_FEE = 0.0
+# BQ only allows 10,000 parameters in a query, so given the way we upsert rows,
+# only upsert DEFAULT_BQ_INSERT_CHUNK_SIZE at once:
+# https://cloud.google.com/bigquery/quotas#:~:text=up%20to%2010%2C000%20parameters.
+DEFAULT_BQ_INSERT_CHUNK_SIZE = 9000
 ANALYSIS_RUNNER_PROJECT_ID = 'analysis-runner'
 DEFAULT_RANGE_INTERVAL = timedelta(days=2)
 
@@ -113,6 +116,7 @@ async def async_retry_transient_get_json_request(
     *args,
     attempts=5,
     session=None,
+    timeout_seconds=60,
     **kwargs,
 ):
     """
@@ -122,7 +126,12 @@ async def async_retry_transient_get_json_request(
     async def inner_block(session):
         for attempt in range(1, attempts + 1):
             try:
-                async with session.get(url, *args, **kwargs) as resp:
+                async with session.get(
+                    url,
+                    timeout=aiohttp.ClientTimeout(total=timeout_seconds),
+                    *args,
+                    **kwargs,
+                ) as resp:
                     resp.raise_for_status()
                     j = await resp.json()
                     return j
@@ -163,7 +172,7 @@ def get_total_hail_cost(currency_conversion_rate, batch_resource, usage):
 
 
 def get_bq_schema_json() -> dict[str, any]:
-    """Get the schema for the table"""
+    """Get the bq schema (in JSON) for the aggregate table"""
     pwd = Path(__file__).parent.parent.resolve()
     schema_path = pwd / 'schema' / 'aggregate_schema.json'
     with open(schema_path, 'r', encoding='utf-8') as f:
@@ -231,7 +240,15 @@ def get_credits(
     project: dict,
 ) -> list[dict[str, any]]:
     """
-    Get a hail/seqr credit for each entry.
+    Get a hail / seqr credit for each entry.
+
+    Dependent on where the cost should be attributed, we apply a "credit"
+    to that topic in order to balanace where money is spent. For example,
+    say $DATASET runs a job using Hail. We determine the cost of that job,
+    apply a "debit" to $DATASET, and an equivalent "credit" to Hail.
+
+    The rough idea being the Hail topic should be roughly $0,
+    minus adminstrative overhead.
     """
 
     hail_credits = [{**e} for e in entries]
@@ -259,7 +276,10 @@ async def get_batches(
 ) -> dict[str, any]:
     """
     Get list of batches for a billing project with no filtering.
-    (Optional): from last_batch_id
+    (optional): billing_project
+        If no billing_project is set, this endpoint returns batches
+        from all BPs the user (aggregate-billing) is a part of.
+    (optional): last_batch_id (found in requests)
     """
 
     qparams = {}
@@ -369,15 +389,15 @@ async def get_jobs_for_batch(batch_id, token: str) -> list[dict[str, any]]:
             new_last_job_id = jresponse.get('last_job_id')
             if new_last_job_id is None:
                 end = True
-            elif last_job_id and new_last_job_id <= last_job_id:
-                raise ValueError('Something fishy with last job id')
+            elif last_job_id:
+                assert new_last_job_id > last_job_id
             last_job_id = new_last_job_id
             jobs.extend(jresponse['jobs'])
 
     return jobs
 
 
-async def migrate_entries_from_hail_in_chunks(
+async def process_entries_from_hail_in_chunks(
     start: datetime,
     end: datetime,
     func_get_finalised_entries_for_batch,
@@ -388,7 +408,7 @@ async def migrate_entries_from_hail_in_chunks(
     dry_run=False,
 ) -> int:
     """
-    Migrate all the seqr entries from hail batch,
+    Process all the seqr entries from hail batch,
     and insert them into the aggregate table.
 
     Break them down by dataset, and then proportion the rest of the costs.
@@ -405,40 +425,40 @@ async def migrate_entries_from_hail_in_chunks(
     if len(batches) == 0:
         return 0
 
-    chnk_counter = 0
+    chunk_counter = 0
     nchnks = math.ceil(len(batches) / entry_chunk_size) * batch_group_chunk_size
 
     # Process chunks of batches to avoid loading too many entries into memory
-    for btch_grp in chunk(batches, entry_chunk_size):
+    for batch_group in chunk(batches, entry_chunk_size):
         jobs_in_batch = []
         entries = []
 
         # Get jobs for a fraction of each chunked batches
         # to avoid hitting hail batch too much
-        for batch_group_group in chunk(btch_grp, batch_group_chunk_size):
-            chnk_counter += 1
-            times = [b['time_created'] for b in batch_group_group]
+        for chunked_batch_Group in chunk(batch_group, batch_group_chunk_size):
+            chunk_counter += 1
+            times = [b['time_created'] for b in chunked_batch_Group]
             min_batch = min(times)
             max_batch = max(times)
 
             if len(batches) > 100:
                 logger.debug(
-                    f'{lp}Getting jobs for batch chunk {chnk_counter}/{nchnks} '
+                    f'{lp}Getting jobs for batch chunk {chunk_counter}/{nchnks} '
                     f'[{min_batch}, {max_batch}]'
                 )
 
-            promises = [get_jobs_for_batch(b['id'], token) for b in batch_group_group]
+            promises = [get_jobs_for_batch(b['id'], token) for b in chunked_batch_Group]
             jobs_in_batch.extend(await asyncio.gather(*promises))
 
-        # insert all entries for this batch
-        for batch, jobs in zip(btch_grp, jobs_in_batch):
+        # insert all entries for each batch
+        for batch, jobs in zip(batch_group, jobs_in_batch):
             batch['jobs'] = jobs
             if len(jobs) > 10000 and len(entries) > 1000:
                 logger.info(
                     f'Expecting large number of jobs ({len(jobs)}) from '
                     f'batch {batch["id"]}, inserting contents early'
                 )
-                result += insert_new_rows_in_table(
+                result += upsert_rows_into_bigquery(
                     table=GCP_AGGREGATE_DEST_TABLE, objs=entries, dry_run=dry_run
                 )
                 entries = []
@@ -449,12 +469,12 @@ async def migrate_entries_from_hail_in_chunks(
             s = sum(sys.getsizeof(e) for e in entries) / 1024 / 1024
             if s > 10:
                 logger.info(f'Size of entries: {s} MB, inserting early')
-                result += insert_new_rows_in_table(
+                result += upsert_rows_into_bigquery(
                     table=GCP_AGGREGATE_DEST_TABLE, objs=entries, dry_run=dry_run
                 )
                 entries = []
 
-        result += insert_new_rows_in_table(
+        result += upsert_rows_into_bigquery(
             table=GCP_AGGREGATE_DEST_TABLE, objs=entries, dry_run=dry_run
         )
 
@@ -465,11 +485,12 @@ RE_matcher = re.compile(r'-\d+$')
 
 
 def billing_row_to_topic(row, dataset_to_gcp_map: dict) -> str | None:
-    """Convert a billing row to a dataset"""
-    try:
-        project_id = row['project']['id']
-    except TypeError:
-        project_id = None
+    """Convert a billing row to a topic name"""
+    project_id = None
+
+    if project := row['project']:
+        assert isinstance(project, dict)
+        project_id = project.get('id')
 
     topic = dataset_to_gcp_map.get(project_id, project_id)
 
@@ -482,13 +503,24 @@ def billing_row_to_topic(row, dataset_to_gcp_map: dict) -> str | None:
     return topic
 
 
-def insert_new_rows_in_table(
-    table: str,
+def upsert_rows_into_bigquery(
     objs: list[dict[str, Any]],
     dry_run: bool,
-    chunk_size=DEFAULT_BQ_CHUNK_SIZE,
+    table: str = GCP_AGGREGATE_DEST_TABLE,
+    chunk_size=DEFAULT_BQ_INSERT_CHUNK_SIZE,
+    max_chunk_size_mb=6,
 ) -> int:
-    """Insert JSON rows into a BQ table"""
+    """
+    Upsert JSON rows into the BQ.aggregate table.
+    It must respect the schema defined in get_bq_schema_json().
+
+    This method will chunk the list of objects into upsertable chunks
+    check which chunks are already in the table, and insert any
+    that are not present.
+
+    It has some optimisations about max insert size, so this should be
+    able to take an arbitrary amount of rows.
+    """
 
     if not objs:
         logger.info('Not inserting any rows')
@@ -496,14 +528,17 @@ def insert_new_rows_in_table(
 
     n_chunks = math.ceil(len(objs) / chunk_size)
     total_size_mb = sys.getsizeof(objs) / (1024 * 1024)
-    if total_size_mb > 10:
-        # bigger than 10MB
-        if (total_size_mb / n_chunks) > 6:
-            chunk_size = math.floor(total_size_mb / 6)
-            logger.info(
-                'The size of the objects to insert into BQ is very large, '
-                f'adjusting the chunk size to {chunk_size}'
-            )
+
+    # if average_chunk_size > max_chunk_size
+    if (total_size_mb / n_chunks) > max_chunk_size_mb:
+        # bigger than max_chunk_size, so let's reduce it
+        chunk_size = math.ceil(total_size_mb / max_chunk_size_mb)
+        n_chunks = math.ceil(len(objs) / chunk_size)
+
+        logger.info(
+            'The size of the objects to insert into BQ is too large, '
+            f'adjusting the chunk size to {chunk_size}'
+        )
 
     if n_chunks > 1:
         logger.info(f'Will insert {len(objs)} rows in {n_chunks} chunks')
@@ -581,8 +616,13 @@ def insert_new_rows_in_table(
     return inserts
 
 
-def insert_dataframe_rows_in_table(table: str, df: pd.DataFrame):
-    """Insert new rows from dataframe into a table"""
+def upsert_aggregated_dataframe_into_bigquery(
+    df: pd.DataFrame, table: str = GCP_AGGREGATE_DEST_TABLE
+):
+    """
+    Upsert rows from a dataframe into the BQ.aggregate table.
+    It must respect the schema defined in get_bq_schema_json().
+    """
 
     _query = f"""
         SELECT id FROM @table
@@ -605,14 +645,14 @@ def insert_dataframe_rows_in_table(table: str, df: pd.DataFrame):
 
     # Insert the new rows
     project_id = table.split('.')[0]
-    table_schema = get_bq_schema_json()
 
+    table_schema = get_bq_schema_json()
     df.to_gbq(
         table,
         project_id=project_id,
         table_schema=table_schema,
         if_exists='append',
-        chunksize=DEFAULT_BQ_CHUNK_SIZE,
+        chunksize=DEFAULT_BQ_INSERT_CHUNK_SIZE,
     )
 
     logger.info(f'{adding_rows} new rows inserted')
@@ -806,10 +846,13 @@ def get_start_and_end_from_data(data) -> tuple[datetime | None, datetime | None]
 
 
 def process_default_start_and_end(
-    start, end, interval=DEFAULT_RANGE_INTERVAL
+    start: datetime | None,
+    end: datetime | None,
+    interval: timedelta = DEFAULT_RANGE_INTERVAL,
 ) -> tuple[datetime, datetime]:
     """
-    Process the start and end times.
+    Take input start / end values, and apply
+    defaults
     """
     if not end and not start:
         # start of today
@@ -825,25 +868,16 @@ def process_default_start_and_end(
 
 
 def get_date_intervals_for(
-    start, end, interval=DEFAULT_RANGE_INTERVAL
+    start: datetime | None,
+    end: datetime | None,
+    interval: timedelta = DEFAULT_RANGE_INTERVAL,
 ) -> Iterator[tuple[datetime, datetime]]:
-    """Process start and end times (and get defaults)"""
+    """
+    Process start and end times from source (by adding appropriate defaults)
+    and return a date_range iterator based on the interval.
+    """
     s, e = process_default_start_and_end(start, end)
     return date_range_iterator(s, e, intv=interval)
-
-
-def read_secret(project_id: str, secret_name: str) -> str | None:
-    """Reads the latest version of a GCP Secret Manager secret.
-
-    Returns None if the secret doesn't exist."""
-
-    secret_manager = secretmanager.SecretManagerServiceClient()
-    secret_path = secret_manager.secret_path(project_id, secret_name)
-
-    response = secret_manager.access_secret_version(
-        request={'name': f'{secret_path}/versions/latest'}
-    )
-    return response.payload.data.decode('UTF-8')
 
 
 def get_hail_entry(
