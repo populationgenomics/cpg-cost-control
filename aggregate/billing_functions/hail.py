@@ -81,17 +81,22 @@ def get_finalised_entries_for_batch(batch: dict) -> List[Dict]:
         if batch_resource.startswith('service-fee'):
             continue
 
+        attributes = batch.get('attributes', {})
         labels = {
             'dataset': dataset,
             'batch_id': str(batch_id),
             'batch_resource': batch_resource,
+            'batch_name': attributes.get('name'),
         }
 
-        name = batch.get('attributes', {}).get('name')
-        if name:
-            labels['batch_name'] = name
+        # Add all batch attributes
+        labels.update(attributes)
 
+        # Construct url
         labels['url'] = utils.HAIL_UI_URL.replace('{batch_id}', str(batch_id))
+
+        # Remove any labels with falsey values e.g. None, '', 0
+        labels = dict(filter(lambda k, v: v, labels.items()))
 
         cost = utils.get_total_hail_cost(
             currency_conversion_rate, batch_resource, usage
