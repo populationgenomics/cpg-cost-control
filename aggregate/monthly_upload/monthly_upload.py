@@ -25,7 +25,7 @@ secret_manager = secretmanager.SecretManagerServiceClient()
 def main(data, _):
     """Main function"""
     loop = asyncio.get_event_loop() or asyncio.new_event_loop()
-    loop.run_until_complete(update_sample_status(data))
+    loop.run_until_complete(upload_monthly_billing_to_airtable(data))
 
 
 def abort_message(status: int, message: str):
@@ -33,7 +33,7 @@ def abort_message(status: int, message: str):
     return abort(Response(json.dumps({'message': message}), status))
 
 
-async def update_sample_status(data):
+async def upload_monthly_billing_to_airtable(data):
     """Main entry point for the Cloud Function."""
 
     if not data.get('attributes'):
@@ -45,7 +45,9 @@ async def update_sample_status(data):
     year = request_json.get('year')
     month = request_json.get('month')
     if not year:
-        return abort(400)
+        return abort_message(
+            400, f'Input year ({year}) and month ({month}) are required'
+        )
 
     if not month:
         month = datetime.now().strftime('%m')
@@ -64,20 +66,22 @@ async def update_sample_status(data):
 
     airtable_config = config.get(year)
     if not airtable_config:
-        return abort(406, f'Airtable config could not be found for year {year}')
+        return abort_message(406, f'Airtable config could not be found for year {year}')
 
     # Get the Airtable credentials.
     base_key = airtable_config.get('baseKey')
     table_name = airtable_config.get('tableName')
     api_key = airtable_config.get('apiKey')
     if not base_key or not table_name or not api_key:
-        return abort(500)
+        return abort_message(
+            500,
+            f'Values baseKey ({base_key}), tableName ({table_name}) '
+            + f'and apiKey ({api_key}) are required in the AirTable config.',
+        )
 
-    await airtable_overwrite_yearly_billing_month(
+    return await airtable_overwrite_yearly_billing_month(
         year, month, base_key, table_name, api_key
     )
-
-    # upload_monthly_report_pdf()
 
 
 def get_billing_data(year: str, month: str) -> DataFrame:
