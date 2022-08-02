@@ -142,7 +142,7 @@ def get_finalised_entries_for_batch(
             labels.pop('name')
 
             # Remove any labels with falsey values e.g. None, '', 0
-            labels = dict(filter(lambda k, v: v, labels.items()))
+            labels = dict(filter(lambda l: l[1], labels.items()))
 
             gross_cost = utils.get_total_hail_cost(
                 currency_conversion_rate, batch_resource, usage

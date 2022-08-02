@@ -97,7 +97,7 @@ def get_finalised_entries_for_batch(batch: dict) -> List[Dict]:
         labels['url'] = utils.HAIL_UI_URL.replace('{batch_id}', str(batch_id))
 
         # Remove any labels with falsey values e.g. None, '', 0
-        labels = dict(filter(lambda k, v: v, labels.items()))
+        labels = dict(filter(lambda l: l[1], labels.items()))
 
         cost = utils.get_total_hail_cost(
             currency_conversion_rate, batch_resource, usage
