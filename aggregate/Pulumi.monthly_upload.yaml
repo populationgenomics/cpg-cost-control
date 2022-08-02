@@ -5,7 +5,7 @@ config:
     - monthly_upload
   opts:memory: 128
   opts:timeout: 540
-  opts:cron: '0 0 8 3 * ? *'
+  opts:cron: '0 0 8 4 * ? *'
   opts:slack_channel: '#software-alerts'
 
   gcp:project: billing-admin-290403

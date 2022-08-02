@@ -42,11 +42,14 @@ through a service account key.
 
 ## Invoking the Cloud Function
 
+Default values are used below, but can be substituted if needed.
 Download a JSON key for the invoker service account. Then run:
 
 ```shell
 gcloud auth activate-service-account --key-file=invoker-service-account.json
 
+REGION="australia-southeast1"
+PROJECT="billing-admin-290403"
 TOKEN=$(gcloud auth print-identity-token)
 
 curl -X PUT https://$REGION-$PROJECT.cloudfunctions.net/update_sample_status \

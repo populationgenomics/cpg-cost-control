@@ -8,7 +8,7 @@ from datetime import datetime
 
 import google.cloud.bigquery as bq
 
-from flask import abort
+from flask import abort, Response
 from pandas import DataFrame
 
 from airtable import Airtable
@@ -28,11 +28,16 @@ def main(data, _):
     loop.run_until_complete(update_sample_status(data))
 
 
+def abort_message(status: int, message: str):
+    """Custom abort wrapper that allows for error messages to be passed through"""
+    return abort(Response(json.dumps({'message': message}), status))
+
+
 async def update_sample_status(data):
     """Main entry point for the Cloud Function."""
 
     if not data.get('attributes'):
-        return abort(405)
+        return abort_message(400, 'No attributes found in data')
 
     request_json = data.get('attributes')
 
@@ -59,7 +64,7 @@ async def update_sample_status(data):
 
     airtable_config = config.get(year)
     if not airtable_config:
-        return abort(404)
+        return abort(406, f'Airtable config could not be found for year {year}')
 
     # Get the Airtable credentials.
     base_key = airtable_config.get('baseKey')
