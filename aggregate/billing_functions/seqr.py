@@ -137,8 +137,9 @@ def get_finalised_entries_for_batch(
                 'url': hail_ui_url,
             }
 
-            # Add all batch attributes
+            # Add all batch attributes, removing any duped labels
             labels.update(attributes)
+            labels.pop('name')
 
             # Remove any labels with falsey values e.g. None, '', 0
             labels = dict(filter(lambda k, v: v, labels.items()))
