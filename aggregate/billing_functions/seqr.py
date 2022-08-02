@@ -86,7 +86,8 @@ def get_finalised_entries_for_batch(
     """
 
     batch_id = batch['id']
-    batch_name = batch.get('attributes', {}).get('name')
+    attributes = batch.get('attributes', {})
+    batch_name = attributes.get('name')
 
     start_time = utils.parse_hail_time(batch['time_created'])
     end_time = utils.parse_hail_time(batch['time_completed'])
@@ -135,6 +136,13 @@ def get_finalised_entries_for_batch(
                 'batch_resource': batch_resource,
                 'url': hail_ui_url,
             }
+
+            # Add all batch attributes, removing any duped labels
+            labels.update(attributes)
+            labels.pop('name')
+
+            # Remove any labels with falsey values e.g. None, '', 0
+            labels = dict(filter(lambda l: l[1], labels.items()))
 
             gross_cost = utils.get_total_hail_cost(
                 currency_conversion_rate, batch_resource, usage
