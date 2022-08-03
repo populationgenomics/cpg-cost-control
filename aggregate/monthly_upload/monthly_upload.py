@@ -1,3 +1,4 @@
+# pylint: disable=global-statement
 """A Cloud Function to update the status of genomic samples."""
 
 import json
@@ -15,11 +16,20 @@ from airtable import Airtable
 from google.cloud import secretmanager
 from requests.exceptions import HTTPError
 
-BQ_CLIENT = bq.Client()
 GCP_PROJECT = 'billing-admin-290403'
 GCP_MONTHLY_BILLING_BQ_TABLE = f'{GCP_PROJECT}.billing_aggregate.aggregate_monthly_cost'
 
 secret_manager = secretmanager.SecretManagerServiceClient()
+
+_BQ_CLIENT: bq.Client = None
+
+
+def get_bigquery_client():
+    """Get instantiated cached bq client"""
+    global _BQ_CLIENT
+    if not _BQ_CLIENT:
+        _BQ_CLIENT = bq.Client()
+    return _BQ_CLIENT
 
 
 def main(data, _):
@@ -105,7 +115,10 @@ def get_billing_data(year: str, month: str) -> DataFrame:
     )
 
     migrate_rows = (
-        BQ_CLIENT.query(_query, job_config=job_config).result().to_dataframe()
+        get_bigquery_client()
+        .query(_query, job_config=job_config)
+        .result()
+        .to_dataframe()
     )
 
     return migrate_rows
