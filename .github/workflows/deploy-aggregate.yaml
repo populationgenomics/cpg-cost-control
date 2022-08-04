@@ -67,7 +67,7 @@ jobs:
         uses: pulumi/actions@v3
         with:
           command: up
-          upsert: false
+          upsert: true
           refresh: true
           work-dir: aggregate
           stack-name: billing_aggregate
@@ -76,7 +76,7 @@ jobs:
         uses: pulumi/actions@v3
         with:
           command: up
-          upsert: false
+          upsert: true
           refresh: true
           work-dir: aggregate
           stack-name: monthly_upload
