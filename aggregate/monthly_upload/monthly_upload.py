@@ -19,8 +19,7 @@ from requests.exceptions import HTTPError
 GCP_PROJECT = 'billing-admin-290403'
 GCP_MONTHLY_BILLING_BQ_TABLE = f'{GCP_PROJECT}.billing_aggregate.aggregate_monthly_cost'
 
-secret_manager = secretmanager.SecretManagerServiceClient()
-
+_SECRET_MANAGER: secretmanager.SecretManagerServiceClient = None
 _BQ_CLIENT: bq.Client = None
 
 
@@ -30,6 +29,14 @@ def get_bigquery_client():
     if not _BQ_CLIENT:
         _BQ_CLIENT = bq.Client()
     return _BQ_CLIENT
+
+
+def get_secret_manager():
+    """Get instantiated secret manager"""
+    global _SECRET_MANAGER
+    if not _SECRET_MANAGER:
+        _SECRET_MANAGER = secretmanager.SecretManagerServiceClient()
+    return _SECRET_MANAGER
 
 
 def main(data, _):
@@ -69,9 +76,11 @@ async def upload_monthly_billing_to_airtable(data):
         f'projects/{GCP_PROJECT}/secrets'
         '/billing-airtable-monthly-upload-apikeys/versions/latest'
     )
-    config_str = secret_manager.access_secret_version(
-        request={'name': secret_name}
-    ).payload.data.decode('UTF-8')
+    config_str = (
+        get_secret_manager()
+        .access_secret_version(request={'name': secret_name})
+        .payload.data.decode('UTF-8')
+    )
     config = json.loads(config_str)
 
     airtable_config = config.get(year)

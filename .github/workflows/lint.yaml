@@ -11,13 +11,6 @@ jobs:
     steps:
       - uses: actions/checkout@v2
 
-      - name: Google Auth
-        uses: "google-github-actions/auth@v0"
-        id: auth
-        with:
-          credentials_json: "${{ secrets.GCP_CREDENTIALS }}"
-          project_id: billing-admin-290403
-
       - uses: actions/setup-python@v2
         with:
           python-version: "3.10"
