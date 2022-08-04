@@ -63,8 +63,8 @@ def main():
     config_values = {
         'NAME': opts.get('name'),
         'CRON': opts.get('cron'),
-        'MEMORY': opts.get('memory'),
-        'TIMEOUT': opts.get('timeout'),
+        'MEMORY': int(opts.get('memory')),
+        'TIMEOUT': int(opts.get('timeout')),
         'FUNCTIONS': opts.get('functions'),
         'SLACK_CHANNEL': opts.get('slack_channel'),
         'GCP_SERVICE_ACCOUNT': opts.get('service_account'),
@@ -119,7 +119,6 @@ def main():
     pubsub = gcp.pubsub.Topic(f'{name}-topic', project=config_values['PROJECT'])
 
     # Create a cron job to run the function every day at midnight.
-    print(config_values['CRON'], config_values['REGION'])
     job = gcp.cloudscheduler.Job(
         f'{name}-job',
         pubsub_target=gcp.cloudscheduler.JobPubsubTargetArgs(
