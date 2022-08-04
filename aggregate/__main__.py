@@ -58,10 +58,9 @@ def main():
     """
     gcp_opts = pulumi.Config(name='gcp')
     opts = pulumi.Config(name='opts')
+    bq_opts = pulumi.Config(name='bq')
 
     config_values = {
-        'REGION': gcp_opts.get('region'),
-        'PROJECT': gcp_opts.get('project'),
         'NAME': opts.get('name'),
         'CRON': opts.get('cron'),
         'MEMORY': opts.get('memory'),
@@ -69,8 +68,10 @@ def main():
         'FUNCTIONS': opts.get('functions'),
         'SLACK_CHANNEL': opts.get('slack_channel'),
         'GCP_SERVICE_ACCOUNT': opts.get('service_account'),
-        'GCP_AGGREGATE_DEST_TABLE': opts.get('destination'),
         'SLACK_AUTH_TOKEN': os.getenv('SLACK_AUTH_TOKEN'),
+        'REGION': gcp_opts.get('region'),
+        'PROJECT': gcp_opts.get('project'),
+        'GCP_AGGREGATE_DEST_TABLE': bq_opts.get('destination'),
     }
 
     # Set environment variable to the correct project
@@ -118,6 +119,7 @@ def main():
     pubsub = gcp.pubsub.Topic(f'{name}-topic', project=config_values['PROJECT'])
 
     # Create a cron job to run the function every day at midnight.
+    print(config_values['CRON'], config_values['REGION'])
     job = gcp.cloudscheduler.Job(
         f'{name}-job',
         pubsub_target=gcp.cloudscheduler.JobPubsubTargetArgs(
