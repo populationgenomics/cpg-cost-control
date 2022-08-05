@@ -39,7 +39,7 @@ def get_secret_manager():
     return _SECRET_MANAGER
 
 
-def main(data, _):
+def monthly_upload(data, _):
     """Main function"""
     loop = asyncio.get_event_loop() or asyncio.new_event_loop()
     loop.run_until_complete(upload_monthly_billing_to_airtable(data))
@@ -190,4 +190,4 @@ def convert_date(date: datetime, frmt: str, frmt_to: str):
 if __name__ == '__main__':
     YEAR = '2022'
     MONTH = '05'
-    main({'attributes': {'year': YEAR, 'month': MONTH}}, None)
+    monthly_upload({'attributes': {'year': YEAR, 'month': MONTH}}, None)
