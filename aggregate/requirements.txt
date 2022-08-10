@@ -1,4 +1,5 @@
 aiohttp==3.8.1
+airtable-python-wrapper==0.15.1
 cpg-utils==2.5.1
 db-dtypes==1.0.0
 google-api-python-client==2.10.0

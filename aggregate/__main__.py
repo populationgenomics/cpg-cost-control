@@ -58,19 +58,20 @@ def main():
     """
     gcp_opts = pulumi.Config(name='gcp')
     opts = pulumi.Config(name='opts')
+    bq_opts = pulumi.Config(name='bq')
 
     config_values = {
-        'REGION': gcp_opts.get('region'),
-        'PROJECT': gcp_opts.get('project'),
         'NAME': opts.get('name'),
         'CRON': opts.get('cron'),
-        'MEMORY': opts.get('memory'),
-        'TIMEOUT': opts.get('timeout'),
+        'MEMORY': int(opts.get('memory')),
+        'TIMEOUT': int(opts.get('timeout')),
         'FUNCTIONS': opts.get('functions'),
         'SLACK_CHANNEL': opts.get('slack_channel'),
         'GCP_SERVICE_ACCOUNT': opts.get('service_account'),
-        'GCP_AGGREGATE_DEST_TABLE': opts.get('destination'),
         'SLACK_AUTH_TOKEN': os.getenv('SLACK_AUTH_TOKEN'),
+        'REGION': gcp_opts.get('region'),
+        'PROJECT': gcp_opts.get('project'),
+        'GCP_AGGREGATE_DEST_TABLE': bq_opts.get('destination'),
     }
 
     # Set environment variable to the correct project
