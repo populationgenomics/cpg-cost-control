@@ -3,7 +3,7 @@ config:
   opts:service_account: aggregate-billing@billing-admin-290403.iam.gserviceaccount.com
   opts:functions:
     - monthly_upload
-  opts:memory: 128
+  opts:memory: 1024
   opts:timeout: 540
   opts:cron: '0 0 8 4 *'
   opts:slack_channel: '#software-alerts'
