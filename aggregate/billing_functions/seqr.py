@@ -447,7 +447,7 @@ async def get_analysis_objects_and_crams_for_seqr_prop_map(
     start_es_date = None
     if relevant_analysis:
         start_es_date = min(
-            datetime.fromtimestamp(a['timestamp_completed']) for a in relevant_analysis
+            datetime.fromisoformat(a['timestamp_completed']) for a in relevant_analysis
         )
 
     # if there are no ES-indices, or es-indices don't cover the range,
