@@ -139,7 +139,8 @@ def get_finalised_entries_for_batch(
 
             # Add all batch attributes, removing any duped labels
             labels.update(attributes)
-            labels.pop('name')
+            if labels.get('name'):
+                labels.pop('name')
 
             # Remove any labels with falsey values e.g. None, '', 0
             labels = dict(filter(lambda l: l[1], labels.items()))

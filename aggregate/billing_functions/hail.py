@@ -91,7 +91,8 @@ def get_finalised_entries_for_batch(batch: dict) -> List[Dict]:
 
         # Add all batch attributes, removing any duped labels
         labels.update(attributes)
-        labels.pop('name')
+        if labels.get('name'):
+            labels.pop('name')
 
         # Construct url
         labels['url'] = utils.HAIL_UI_URL.replace('{batch_id}', str(batch_id))

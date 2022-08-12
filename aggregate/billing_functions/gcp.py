@@ -71,7 +71,7 @@ def migrate_billing_data(start, end, dataset_to_topic) -> int:
 
     migrate_rows = get_billing_data(start, end)
 
-    if not migrate_rows:
+    if len(migrate_rows) == 0:
         logger.info('No rows to migrate')
         return 0
 

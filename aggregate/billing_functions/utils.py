@@ -29,8 +29,12 @@ handler = logging.StreamHandler(sys.stderr)
 handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s: %(message)s'))
 
 logger.addHandler(handler)
-if os.getenv('DEV') in ('1', 'true', 'yes'):
-    logger.setLevel(logging.DEBUG)
+if os.getenv('DEBUG') in ('1', 'true', 'yes') or os.getenv('DEV') in (
+    '1',
+    'true',
+    'yes',
+):
+    logger.setLevel(logging.INFO)
 
 # pylint: disable=invalid-name
 T = TypeVar('T')
@@ -624,16 +628,18 @@ def upsert_aggregated_dataframe_into_bigquery(
     It must respect the schema defined in get_bq_schema_json().
     """
 
+    # Cannot use query parameters for table names
+    # https://cloud.google.com/bigquery/docs/parameterized-queries
     _query = f"""
-        SELECT id FROM @table
+        SELECT id FROM {table}
         WHERE id IN UNNEST(@ids);
     """
     job_config = bq.QueryJobConfig(
         query_parameters=[
-            bq.ArrayQueryParameter('table', 'STRING', table),
             bq.ArrayQueryParameter('ids', 'STRING', list(set(df['id']))),
         ]
     )
+
     result = get_bigquery_client().query(_query, job_config=job_config).result()
     existing_ids = set(result.to_dataframe()['id'])
 
