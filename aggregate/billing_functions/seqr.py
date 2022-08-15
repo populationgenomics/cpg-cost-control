@@ -641,22 +641,28 @@ def get_ratios_from_date(
 
     >>> get_ratios_from_date(
     ...     datetime(2020, 1, 1),
-    ...     [(datetime(2019,12,31), {'d1': 1.0})]
+    ...     [(datetime(2020,12,31), {'d1': 1.0})]
     ... )
-    (datetime.datetime(2019, 12, 31, 0, 0), {'d1': 1.0})
+    (datetime.datetime(2020, 1, 1, 0, 0), {})
 
     >>> get_ratios_from_date(
-    ...     datetime(2020, 1, 13),
-    ...     [(datetime(2019,12,31), {'d1': 1.0}), (datetime(2020,1,12), {'d1': 1.0})]
+    ...     datetime(2023, 1, 1),
+    ...     [(datetime(2022,12,31), {'d1': 1.0})]
     ... )
-    (datetime.datetime(2020, 1, 12, 0, 0), {'d1': 1.0})
+    (datetime.datetime(2022, 12, 31, 0, 0), {'d1': 1.0})
 
     >>> get_ratios_from_date(
-    ...     datetime(2020, 1, 1), [(datetime(2020,1,2), {'d1': 1.0})]
+    ...     datetime(2023, 1, 13),
+    ...     [(datetime(2022,12,31), {'d1': 1.0}), (datetime(2023,1,12), {'d1': 1.0})]
+    ... )
+    (datetime.datetime(2023, 1, 12, 0, 0), {'d1': 1.0})
+
+    >>> get_ratios_from_date(
+    ...     datetime(2023, 1, 1), [(datetime(2023,1,2), {'d1': 1.0})]
     ... )
     Traceback (most recent call last):
     ...
-    AssertionError: No ratio found for date 2020-01-01 00:00:00
+    AssertionError: No ratio found for date 2023-01-01 00:00:00
     """
     assert isinstance(dt, datetime)
 
