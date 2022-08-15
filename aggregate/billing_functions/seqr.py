@@ -593,7 +593,9 @@ def get_shared_computation_prop_map(
     by_date_diff: dict[date, dict[str, int]] = defaultdict(lambda: defaultdict(int))
     for cram in crams:
         tc = utils.parse_hail_time(cram.get('timestamp_completed'))
+        tc = tc if tc else utils.parse_hail_time(cram.get('time_completed'))
         project_name = project_id_map[cram['project']]
+        logger.info(tc, min_datetime)
         if tc < min_datetime:
             # avoid computation by capping dates to minimum
             tc = min_datetime

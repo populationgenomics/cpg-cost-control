@@ -21,8 +21,8 @@ resources = {
 }
 batch = {
     'id': 42,
-    'time_created': '2020-03-03T11:22:33Z',
-    'time_completed': '2020-03-03T12:22:33Z',
+    'time_created': '2023-03-03T11:22:33Z',
+    'time_completed': '2023-03-03T12:22:33Z',
     'billing_project': 'DS1',
     'jobs': [
         {
@@ -57,7 +57,7 @@ class TestCombinationCosts(unittest.TestCase):
         """
         mock_currency_conversion_rate.return_value = 2.0
 
-        prop_map = [(datetime(2020, 1, 1), {'DS1': 0.3, 'DS2': 0.7})]
+        prop_map = [(datetime(2023, 1, 1), {'DS1': 0.3, 'DS2': 0.7})]
 
         seqr_entries = seqr_finalise_batch(batch, prop_map)
         hail_entries = hail_finalise_batch(batch)

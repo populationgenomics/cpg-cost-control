@@ -34,7 +34,7 @@ class TestSeqrHostingPropMapFunctionality(unittest.TestCase):
             }
             for i, (sid, size) in enumerate(sid_to_size)
         ]
-        dt = datetime(2020, 3, 1)
+        dt = datetime(2023, 3, 1)
         analyses = [
             {
                 'timestamp_completed': dt.isoformat(),
@@ -75,11 +75,11 @@ class TestSeqrHostingPropMapFunctionality(unittest.TestCase):
 
         analyses = [
             {
-                'timestamp_completed': datetime(2020, 3, 1).isoformat(),
+                'timestamp_completed': datetime(2023, 3, 1).isoformat(),
                 'sample_ids': [s for s, _ in sid_to_size[:5]],
             },
             {
-                'timestamp_completed': datetime(2020, 4, 1).isoformat(),
+                'timestamp_completed': datetime(2023, 4, 1).isoformat(),
                 'sample_ids': [s for s, _ in sid_to_size],
             },
         ]
@@ -123,7 +123,7 @@ class TestSeqrGetFinalisedEntriesForBatch(unittest.TestCase):
         # mock currency_conversion request to avoid hitting BQ
         mock_currency_conversion_rate.return_value = 2.0
 
-        prop_map = [(datetime(2020, 1, 1), {'DS1': 0.25, 'DS2': 0.75})]
+        prop_map = [(datetime(2023, 1, 1), {'DS1': 0.25, 'DS2': 0.75})]
         resources = {
             'compute/n1-preemptible/1': 1e6,
             'memory/n1-preemptible/1': 1e6,
@@ -131,8 +131,8 @@ class TestSeqrGetFinalisedEntriesForBatch(unittest.TestCase):
         }
         batch = {
             'id': 42,
-            'time_created': '2020-03-03T11:22:33Z',
-            'time_completed': '2020-03-03T12:22:33Z',
+            'time_created': '2023-03-03T11:22:33Z',
+            'time_completed': '2023-03-03T12:22:33Z',
             'jobs': [
                 {
                     'job_id': 1,
@@ -216,7 +216,7 @@ class TestSeqrComputationPropMap(unittest.TestCase):
                 'meta': {'size': size},
                 'project': project_ids[i % len(project_ids)],
                 # new cram every second day
-                'time_completed': datetime(2020, 1, i * 2 + 1),
+                'time_completed': datetime(2023, 1, i * 2 + 1),
             }
             for i, (sid, size) in enumerate(sid_to_size)
         ]
@@ -245,7 +245,7 @@ class TestSeqrComputationPropMap(unittest.TestCase):
                 'meta': {'size': size},
                 'project': project_ids[i % len(project_ids)],
                 'time_completed': datetime(
-                    2020, 1, crams_to_size[i % len(crams_to_size)], 0, 0, 0
+                    2023, 1, crams_to_size[i % len(crams_to_size)], 0, 0, 0
                 ),
             }
             for i, (sid, size) in enumerate(sid_to_size)
@@ -280,7 +280,7 @@ class TestSeqrComputationPropMap(unittest.TestCase):
                 'meta': {'size': size},
                 'project': project_ids[i % len(project_ids)],
                 'time_completed': datetime(
-                    2020, 1, crams_to_size[i % len(crams_to_size)], 0, 0, 0
+                    2023, 1, crams_to_size[i % len(crams_to_size)], 0, 0, 0
                 ),
             }
             for i, (sid, size) in enumerate(sid_to_size)
@@ -291,7 +291,7 @@ class TestSeqrComputationPropMap(unittest.TestCase):
         )
         # condensed map
         condensed_prop_map = get_shared_computation_prop_map(
-            crams, project_id_map, datetime(2020, 1, 2), datetime(2020, 1, 3, 23, 59)
+            crams, project_id_map, datetime(2023, 1, 2), datetime(2023, 1, 3, 23, 59)
         )
 
         self.assertEqual(4, len(uncondensed_prop_map))
