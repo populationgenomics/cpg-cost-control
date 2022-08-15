@@ -217,7 +217,16 @@ def parse_hail_time(time_str: str) -> datetime:
     if isinstance(time_str, datetime):
         return time_str
 
-    return datetime.strptime(time_str, '%Y-%m-%dT%H:%M:%SZ')
+    if time_str is None:
+        return None
+
+    for fmt in ('%Y-%m-%dT%H:%M:%S', '%Y-%m-%dT%H:%M:%SZ'):
+        try:
+            return datetime.strptime(time_str, fmt)
+        except ValueError:
+            pass
+
+    raise ValueError(f'Could not convert date {time_str}')
 
 
 def to_bq_time(time: datetime):
