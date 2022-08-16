@@ -16,9 +16,12 @@ seqr(args, None)
 Set your DEBUG environment variable to true and the other required tokens
 
 ```shell
-export DEBUG=1
-export HAIL_TOKEN=<aggregate_billing_hail_token>
-unset SM_ENVIRONMENT
+cat > .env <<EOF
+DEBUG=1
+HAIL_TOKEN=<aggregate_billing_hail_token>
+SM_ENVIRONMENT=
+EOF
+source .env
 ```
 
 Then simply run the following:

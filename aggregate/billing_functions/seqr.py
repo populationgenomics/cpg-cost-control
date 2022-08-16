@@ -60,7 +60,8 @@ ProportionateMapType = list[tuple[datetime, dict[str, float]]]
 SERVICE_ID = 'seqr'
 SEQR_HAIL_BILLING_PROJECT = 'seqr'
 ES_ANALYSIS_OBJ_INTRO_DATE = datetime(2022, 6, 10)
-FIRST_CRAM_DATE = datetime(2022, 8, 1)
+
+SEQR_FIRST_LOAD = datetime(2021, 9, 1)
 
 GCP_BILLING_BQ_TABLE = (
     'billing-admin-290403.billing.gcp_billing_export_v1_01D012_20A6A2_CBD343'
@@ -92,7 +93,13 @@ def get_finalised_entries_for_batch(
 
     start_time = utils.parse_hail_time(batch['time_created'])
     end_time = utils.parse_hail_time(batch['time_completed'])
-    _, prop_map = get_ratios_from_date(start_time, proportion_map)
+
+    # Assign all seqr cost to seqr topic before first ever load
+    # Otherwise, determine proportion cost across topics
+    if start_time < SEQR_FIRST_LOAD:
+        prop_map = {'seqr': 1.0}
+    else:
+        _, prop_map = get_ratios_from_date(start_time, proportion_map)
 
     currency_conversion_rate = utils.get_currency_conversion_rate_for_time(start_time)
 
@@ -327,8 +334,11 @@ def migrate_entries_from_bq(
                 int(obj['usage_start_time'] / 1000)
             )
 
-            if current_date is None or usage_start_time > current_date:
-                # use and abuse the
+            # Assign all seqr cost to seqr topic before first ever load
+            # Otherwise, determine proportion cost across topics
+            if usage_start_time < SEQR_FIRST_LOAD:
+                param_map = {'seqr': 1.0}
+            elif current_date is None or usage_start_time > current_date:
                 current_date, param_map = get_ratios_from_date(
                     dt=usage_start_time, prop_map=prop_map
                 )
@@ -668,15 +678,11 @@ def get_ratios_from_date(
     """
     assert isinstance(dt, datetime)
 
-    if dt < FIRST_CRAM_DATE:
-        return dt, {}
-
     # prop_map is sorted ASC by date, so we
     # can find the latest element that is <= date
     for idt, m in prop_map[::-1]:
         # first entry BEFORE the date
         if idt <= dt:
-            logger.info(idt, m)
             return idt, m
 
     raise AssertionError(f'No ratio found for date {dt}')
