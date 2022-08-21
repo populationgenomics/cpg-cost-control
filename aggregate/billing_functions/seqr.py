@@ -59,7 +59,7 @@ ProportionateMapType = list[tuple[datetime, dict[str, float]]]
 
 SERVICE_ID = 'seqr'
 SEQR_HAIL_BILLING_PROJECT = 'seqr'
-ES_ANALYSIS_OBJ_INTRO_DATE = datetime(2022, 6, 10)
+ES_ANALYSIS_OBJ_INTRO_DATE = datetime(2022, 12, 31)
 
 SEQR_FIRST_LOAD = datetime(2021, 9, 1)
 
@@ -417,9 +417,11 @@ async def generate_proportionate_maps_of_datasets(
     filtered_projects = list(set(sm_pid_to_dataset.values()).intersection(projects))
     missing_projects = set(projects) - set(sm_pid_to_dataset.values())
     if missing_projects:
-        logger.warning(
+        raise ValueError(
             f'The datasets {", ".join(missing_projects)} were not found in SM'
         )
+
+    logger.info(f'Getting proportionate map for projects: {filtered_projects}')
 
     analyses, crams = await get_analysis_objects_and_crams_for_seqr_prop_map(
         start, end, filtered_projects
@@ -494,21 +496,28 @@ async def get_analysis_objects_and_crams_for_seqr_prop_map(
             relevant_analysis = relevant_analysis[idx:]
             break
 
-    all_samples = set(s for a in relevant_analysis for s in a['sample_ids'])
-
     crams = await aapi.query_analyses_async(
         AnalysisQueryModel(
-            sample_ids=list(all_samples),
             type=AnalysisType('cram'),
             projects=projects,
             status=AnalysisStatus('completed'),
         )
     )
+
+    # hackyish remove duplicates
+    cram_output_paths_dedup: set[str] = set()
+    deduped_crams = []
+    for cram in crams:
+        if cram['output'] in cram_output_paths_dedup:
+            continue
+        deduped_crams.append(cram)
+        cram_output_paths_dedup.add(cram['output'])
+
     logger.debug(
         f'Took {(datetime.now() - timeit_start).total_seconds()} to get analyses'
     )
 
-    return relevant_analysis, crams
+    return relevant_analysis, deduped_crams
 
 
 def get_seqr_hosting_prop_map_from(
@@ -684,6 +693,8 @@ def get_ratios_from_date(
         if idt <= dt:
             return idt, m
 
+    logger.error(dt)
+    logger.error(prop_map)
     raise AssertionError(f'No ratio found for date {dt}')
 
 
@@ -757,8 +768,15 @@ def from_pubsub(data=None, _=None):
 
 if __name__ == '__main__':
     test_start, test_end = None, None
-    test_start, test_end = datetime(2022, 5, 1), datetime(2022, 6, 10)
+
+    # 2022-05-17 03:17:40
+    test_start, test_end = datetime(2022, 3, 1), datetime(2022, 6, 1)
+    prjcts = get_seqr_datasets()
 
     asyncio.new_event_loop().run_until_complete(
-        main(start=test_start, end=test_end, dry_run=False)
+        generate_proportionate_maps_of_datasets(test_start, test_end, prjcts)
     )
+
+    # asyncio.new_event_loop().run_until_complete(
+    #     main(start=test_start, end=test_end, dry_run=False)
+    # )
