@@ -89,6 +89,10 @@ def get_finalised_entries_for_batch(batch: dict) -> List[Dict]:
             'batch_name': attributes.get('name'),
         }
 
+        logger.info(batch_id)
+        if batch_id == 97645:
+            logger.info('hi')
+
         # Add all batch attributes, removing any duped labels
         labels.update(attributes)
         if labels.get('name'):
@@ -170,6 +174,6 @@ async def main(
 
 if __name__ == '__main__':
     test_start, test_end = None, None
-    test_start, test_end = datetime(2022, 5, 1), None
+    test_start, test_end = datetime(2022, 7, 28), datetime(2022, 7, 29)
 
     asyncio.new_event_loop().run_until_complete(main(start=test_start, end=test_end))

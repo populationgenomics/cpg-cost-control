@@ -72,6 +72,9 @@ BASE = 'https://batch.hail.populationgenomics.org.au'
 BATCHES_API = BASE + '/api/v1alpha/batches'
 JOBS_API = BASE + '/api/v1alpha/batches/{batch_id}/jobs/resources'
 
+JOB_ATTRIBUTES_IGNORE = {'name', 'dataset', 'samples'}
+
+
 logger = utils.logger
 
 papi = ProjectApi()
@@ -80,7 +83,7 @@ aapi = AnalysisApi()
 
 
 def get_finalised_entries_for_batch(
-    batch, proportion_map: ProportionateMapType
+    batch, proportion_map: ProportionateMapType  # pylint: disable=unused-argument
 ) -> list[dict[str, any]]:
     """
     Take a batch dictionary, and the full proportion map
@@ -88,8 +91,8 @@ def get_finalised_entries_for_batch(
     """
 
     batch_id = batch['id']
-    attributes = batch.get('attributes', {})
-    batch_name = attributes.get('name')
+    batch_attributes = batch.get('attributes', {})
+    batch_name = batch_attributes.get('name')
 
     start_time = utils.parse_hail_time(batch['time_created'])
     end_time = utils.parse_hail_time(batch['time_completed'])
@@ -99,7 +102,8 @@ def get_finalised_entries_for_batch(
     if start_time < SEQR_FIRST_LOAD:
         prop_map = {'seqr': 1.0}
     else:
-        _, prop_map = get_ratios_from_date(start_time, proportion_map)
+        # _, prop_map = get_ratios_from_date(start_time, proportion_map)
+        prop_map = {'seqr': 1.0}
 
     currency_conversion_rate = utils.get_currency_conversion_rate_for_time(start_time)
 
@@ -109,7 +113,7 @@ def get_finalised_entries_for_batch(
     for job in batch['jobs']:
         dataset = job['attributes'].get('dataset', '').replace('-test', '')
         if not dataset:
-            jobs_with_no_dataset.append(job)
+            # jobs_with_no_dataset.append(job)
             continue
 
         entries.extend(
@@ -145,10 +149,12 @@ def get_finalised_entries_for_batch(
                 'url': hail_ui_url,
             }
 
-            # Add all batch attributes, removing any duped labels
-            labels.update(attributes)
-            if labels.get('name'):
-                labels.pop('name')
+            for k, v in job.get('attributes', {}).items():
+                if k in JOB_ATTRIBUTES_IGNORE:
+                    continue
+                if k == 'stage' and not v:
+                    logger.info('Empty stage')
+                labels[k] = str(v)
 
             # Remove any labels with falsey values e.g. None, '', 0
             labels = dict(filter(lambda l: l[1], labels.items()))
@@ -218,7 +224,6 @@ def get_finalised_entries_for_dataset_batch_and_job(
 
     job_id = job['job_id']
     job_name = job['attributes'].get('name')
-    sample = job['attributes'].get('sample')
 
     hail_ui_url = utils.HAIL_UI_URL.replace('{batch_id}', str(batch_id))
 
@@ -229,8 +234,16 @@ def get_finalised_entries_for_dataset_batch_and_job(
         'batch_id': str(batch_id),
         'job_id': str(job_id),
     }
-    if sample:
-        labels['sample'] = sample
+
+    for k, v in job.get('attributes', {}).items():
+        if k in JOB_ATTRIBUTES_IGNORE:
+            continue
+        if k == 'stage' and not v:
+            logger.info('Empty stage')
+        labels[k] = str(v)
+
+    # Remove any labels with falsey values e.g. None, '', 0
+    labels = dict(filter(lambda l: l[1], labels.items()))
 
     resources = job['resources']
     if not resources:
@@ -769,13 +782,19 @@ def from_pubsub(data=None, _=None):
 if __name__ == '__main__':
     test_start, test_end = None, None
 
-    # 2022-05-17 03:17:40
-    test_start, test_end = datetime(2022, 3, 1), datetime(2022, 6, 1)
+    test_start, test_end = datetime(2022, 5, 1), datetime(2022, 6, 1)
+    # asyncio.new_event_loop().run_until_complete(main(start=test_start, end=test_end))
+
+    # # 2022-05-17 03:17:40
+    # test_start, test_end = datetime(2022, 3, 1), datetime(2022, 6, 1)
     prjcts = get_seqr_datasets()
 
-    asyncio.new_event_loop().run_until_complete(
+    a, b = asyncio.new_event_loop().run_until_complete(
         generate_proportionate_maps_of_datasets(test_start, test_end, prjcts)
     )
+
+    print(a)
+    print(b)
 
     # asyncio.new_event_loop().run_until_complete(
     #     main(start=test_start, end=test_end, dry_run=False)
