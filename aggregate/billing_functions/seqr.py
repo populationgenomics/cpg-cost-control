@@ -437,29 +437,32 @@ async def generate_proportionate_maps_of_datasets(
 
     logger.info(f'Getting proportionate map for projects: {filtered_projects}')
 
-    # So here
-    project_file_sizes = aapi.get_sample_file_sizes_async(
+    # Let's get the file size for each sample in all project, then we can determine
+    # by-use-case how much each sample / project should be responsible for the cost
+    sample_file_sizes_by_project = aapi.get_sample_file_sizes_async(
         project_names=projects, start_date=str(start.date), end_date=str(end.date)
     )
+    # this looks like {'dataset': [{"sample_id": "CPG123", "dates": [...]}, ...]}
     file_sizes_by_project: dict[str, list[dict]] = {
-        p['project']: p['samples'] for p in project_file_sizes
+        p['project']: p['samples'] for p in sample_file_sizes_by_project
     }
 
-    joint_analyses = await get_analysis_objects_and_crams_for_seqr_prop_map(
+    # these are used to determine if a sample is _in_ seqr.
+    joint_call_analyses = await get_analysis_objects_and_crams_for_seqr_prop_map(
         start, end, filtered_projects
     )
 
-    seqr_map = get_seqr_hosting_prop_map_from(
-        joint_analyses, file_sizes_by_project, project_id_map=sm_pid_to_dataset
+    seqr_hosting_map = get_seqr_hosting_prop_map_from(
+        joint_call_analyses, file_sizes_by_project, project_id_map=sm_pid_to_dataset
     )
-    hail_map = get_shared_computation_prop_map(
+    shared_computation_map = get_shared_computation_prop_map(
         file_sizes_by_project,
         project_id_map=sm_pid_to_dataset,
         min_datetime=start,
         max_datetime=end,
     )
 
-    return seqr_map, hail_map
+    return seqr_hosting_map, shared_computation_map
 
 
 async def get_analysis_objects_and_crams_for_seqr_prop_map(
@@ -576,9 +579,7 @@ def get_seqr_hosting_prop_map_from(
             relevant_analyses,
         )
     )
-    date_sizes_by_sample: dict[str, list[tuple[datetime.date, int]]] = defaultdict(
-        list
-    )
+    date_sizes_by_sample: dict[str, list[tuple[datetime.date, int]]] = defaultdict(list)
     sample_to_project = {}
     # let's loop through, and basically get the potential differential
     # by day, this means we can just sum up all the values, rather than
@@ -811,15 +812,17 @@ async def main(start: datetime = None, end: datetime = None, dry_run=False):
     projects = get_seqr_datasets()
 
     (
-        ongoing_gcp_prop_map,
-        hail_processing_prop_map,
+        seqr_hosting_prop_map,
+        shared_computation_prop_map,
     ) = await generate_proportionate_maps_of_datasets(start, end, projects)
     result = 0
 
-    result += migrate_entries_from_bq(start, end, ongoing_gcp_prop_map, dry_run=dry_run)
+    result += migrate_entries_from_bq(
+        start, end, seqr_hosting_prop_map, dry_run=dry_run
+    )
 
     def func_get_finalised_entries(batch):
-        return get_finalised_entries_for_batch(batch, hail_processing_prop_map)
+        return get_finalised_entries_for_batch(batch, shared_computation_prop_map)
 
     result += await utils.process_entries_from_hail_in_chunks(
         start=start,
