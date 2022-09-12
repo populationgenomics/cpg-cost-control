@@ -10,7 +10,7 @@ import logging
 from pathlib import Path
 from io import StringIO
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 import sys
 from typing import Any, Iterator, Sequence, TypeVar, Iterable
 
@@ -205,6 +205,17 @@ def get_formatted_bq_schema() -> list[bq.SchemaField]:
     Get schema for bigquery billing table, as a list of bq.SchemaField objects
     """
     return _format_bq_schema_json(get_bq_schema_json())
+
+
+def parse_date_only_string(d: str | None) -> date | None:
+    """Convert date string to date, allow for None"""
+    if not d:
+        return None
+
+    try:
+        return datetime.strptime(d, '%Y-%m-%d').date()
+    except Exception as excep:
+        raise ValueError(f'Date could not be converted: {d}') from excep
 
 
 def parse_hail_time(time_str: str) -> datetime:
