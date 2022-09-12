@@ -1,6 +1,5 @@
 """seqr aggregator testing"""
 
-import re
 import unittest
 from collections import defaultdict
 from datetime import datetime, timedelta
@@ -17,20 +16,21 @@ def _get_default_sample_size_map(sample_id, size_offset: list[tuple[int, int]]):
     if any(day_offset > 15 for _, day_offset in size_offset):
         raise ValueError(f'Date offset too high (>15) for {size_offset}')
     return {
-        "sample": sample_id,
-        "dates": [
+        'sample': sample_id,
+        'dates': [
             {
-                "start": datetime(2023, 1, day_offset or 1).date().isoformat(),
-                "finish": None
+                'start': datetime(2023, 1, day_offset or 1).date().isoformat(),
+                'finish': None
                 # finish := None if last in list
                 if idx == (len(size_offset) - 1)
                 # the next interval's start - 1 day
                 else datetime(2023, 1, size_offset[idx + 1][1] - 1).date().isoformat(),
-                "size": {"genome": size},
+                'size': {'genome': size},
             }
             for idx, (size, day_offset) in enumerate(size_offset)
         ],
     }
+
 
 class TestSeqrHostingPropMapFunctionality(unittest.TestCase):
     """
@@ -47,7 +47,9 @@ class TestSeqrHostingPropMapFunctionality(unittest.TestCase):
 
         sample_sizes_by_project = defaultdict(list)
         for i, (dataset, s, sz) in enumerate(sid_to_size):
-            sample_sizes_by_project[dataset].append(_get_default_sample_size_map(s, [(sz, i+1)]))
+            sample_sizes_by_project[dataset].append(
+                _get_default_sample_size_map(s, [(sz, i + 1)])
+            )
 
         dt = datetime(2023, 3, 1)
         analyses = [
@@ -82,7 +84,9 @@ class TestSeqrHostingPropMapFunctionality(unittest.TestCase):
         sample_sizes_by_project = defaultdict(list)
         for i, (s, sz) in enumerate(sid_to_size):
             p = project_list[i % len(project_list)]
-            sample_sizes_by_project[p].append(_get_default_sample_size_map(s, [(sz, i+1)]))
+            sample_sizes_by_project[p].append(
+                _get_default_sample_size_map(s, [(sz, i + 1)])
+            )
 
         analyses = [
             {
@@ -222,7 +226,9 @@ class TestSeqrComputationPropMap(unittest.TestCase):
         sid_to_size = [('DS1', 'CPG1', 1), ('DS2', 'CPG2', 3)]
         sample_sizes_by_project = defaultdict(list)
         for i, (d, s, sz) in enumerate(sid_to_size):
-            sample_sizes_by_project[d].append(_get_default_sample_size_map(s, [(sz, i * 2 + 1)]))
+            sample_sizes_by_project[d].append(
+                _get_default_sample_size_map(s, [(sz, i * 2 + 1)])
+            )
 
         prop_map = get_shared_computation_prop_map(
             sample_sizes_by_project=sample_sizes_by_project,
@@ -245,10 +251,14 @@ class TestSeqrComputationPropMap(unittest.TestCase):
         sid_to_size = [(f'CPG{i}', i) for i in range(1, 11)]
         sample_sizes_by_project = defaultdict(list)
         for i, (s, sz) in enumerate(sid_to_size):
-            sample_sizes_by_project[project_list[i % len(project_list)]].append(_get_default_sample_size_map(s, [(sz, i+1)]))
+            sample_sizes_by_project[project_list[i % len(project_list)]].append(
+                _get_default_sample_size_map(s, [(sz, i + 1)])
+            )
 
         prop_map = get_shared_computation_prop_map(
-            sample_sizes_by_project=sample_sizes_by_project, min_datetime=datetime.min, max_datetime=datetime.max
+            sample_sizes_by_project=sample_sizes_by_project,
+            min_datetime=datetime.min,
+            max_datetime=datetime.max,
         )
         # we can sort of cheat and just check the last one, because they all
         # build off each other, so if the last is correct, it's likely they're
@@ -272,14 +282,20 @@ class TestSeqrComputationPropMap(unittest.TestCase):
 
         sample_sizes_by_project = defaultdict(list)
         for i, (s, sz) in enumerate(sid_to_size):
-            sample_sizes_by_project[project_list[i % len(project_list)]].append(_get_default_sample_size_map(s, [(sz, cram_days[i % len(cram_days)])]))
+            sample_sizes_by_project[project_list[i % len(project_list)]].append(
+                _get_default_sample_size_map(s, [(sz, cram_days[i % len(cram_days)])])
+            )
 
         uncondensed_prop_map = get_shared_computation_prop_map(
-            sample_sizes_by_project=sample_sizes_by_project, min_datetime=datetime.min, max_datetime=datetime.max
+            sample_sizes_by_project=sample_sizes_by_project,
+            min_datetime=datetime.min,
+            max_datetime=datetime.max,
         )
         # condensed map
         condensed_prop_map = get_shared_computation_prop_map(
-            sample_sizes_by_project=sample_sizes_by_project, min_datetime=datetime(2023, 1, 2), max_datetime=datetime(2023, 1, 3, 23, 59)
+            sample_sizes_by_project=sample_sizes_by_project,
+            min_datetime=datetime(2023, 1, 2),
+            max_datetime=datetime(2023, 1, 3, 23, 59),
         )
 
         self.assertEqual(4, len(uncondensed_prop_map))

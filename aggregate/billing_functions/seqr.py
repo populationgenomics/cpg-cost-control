@@ -1,4 +1,4 @@
-# pylint: disable=logging-format-interpolation
+# pylint: disable=logging-format-interpolation,too-many-locals,too-many-branches
 """
 This cloud function runs DAILY, and distributes the cost of
 SEQR on the sample size within SEQR.
@@ -448,16 +448,16 @@ async def generate_proportionate_maps_of_datasets(
     }
 
     # these are used to determine if a sample is _in_ seqr.
-    joint_call_analyses = await get_analysis_objects_and_crams_for_seqr_prop_map(
-        start, end, filtered_projects
+    joint_call_analyses = await get_analysis_objects_for_seqr_hosting_prop_map(
+        start, end
     )
 
     seqr_hosting_map = get_seqr_hosting_prop_map_from(
-        joint_call_analyses, file_sizes_by_project, project_id_map=sm_pid_to_dataset
+        relevant_analyses=joint_call_analyses,
+        sample_sizes_by_project=file_sizes_by_project,
     )
     shared_computation_map = get_shared_computation_prop_map(
         file_sizes_by_project,
-        project_id_map=sm_pid_to_dataset,
         min_datetime=start,
         max_datetime=end,
     )
@@ -465,9 +465,9 @@ async def generate_proportionate_maps_of_datasets(
     return seqr_hosting_map, shared_computation_map
 
 
-async def get_analysis_objects_and_crams_for_seqr_prop_map(
-    start: datetime, end: datetime, projects: list[str]
-):
+async def get_analysis_objects_for_seqr_hosting_prop_map(
+    start: datetime, end: datetime
+) -> list[dict]:
     """
     Fetch the relevant analysis objects + crams from sample-metadata
     to put together the proportionate_map.
@@ -525,28 +525,11 @@ async def get_analysis_objects_and_crams_for_seqr_prop_map(
             relevant_analysis = relevant_analysis[idx:]
             break
 
-    crams = await aapi.query_analyses_async(
-        AnalysisQueryModel(
-            type=AnalysisType('cram'),
-            projects=projects,
-            status=AnalysisStatus('completed'),
-        )
-    )
-
-    # hackyish remove duplicates
-    cram_output_paths_dedup: set[str] = set()
-    deduped_crams = []
-    for cram in crams:
-        if cram['output'] in cram_output_paths_dedup:
-            continue
-        deduped_crams.append(cram)
-        cram_output_paths_dedup.add(cram['output'])
-
     logger.debug(
         f'Took {(datetime.now() - timeit_start).total_seconds()} to get analyses'
     )
 
-    return relevant_analysis, deduped_crams
+    return relevant_analysis
 
 
 def get_seqr_hosting_prop_map_from(
@@ -559,8 +542,6 @@ def get_seqr_hosting_prop_map_from(
 
     One method, we can cycle thorugh sample_sizes_by_project, and calculate a delta,
     so we can iterate from start of time, and then just add up all relevant values.
-
-
     """
 
     timeit_start = datetime.now()
@@ -612,7 +593,7 @@ def get_seqr_hosting_prop_map_from(
             # these are ordered
             sizes_by_date_then_sample[sdate][sample_id] += size
 
-    ordered_sizes_by_date_then_sample = list(
+    ordered_sizes_by_day = list(
         sorted(sizes_by_date_then_sample.items(), key=lambda el: el[0])
     )
 
@@ -632,8 +613,8 @@ def get_seqr_hosting_prop_map_from(
         # only selecting the sampleIDs we want
 
         size_per_project = defaultdict(int)
-        for date, sample_map in ordered_sizes_by_date_then_sample:
-            if date > analysis_day:
+        for sample_date, sample_map in ordered_sizes_by_day:
+            if sample_date > analysis_day:
                 break
             relevant_samples_in_day = set(sample_map.keys()).intersection(samples)
             for sample in relevant_samples_in_day:
@@ -691,7 +672,6 @@ def get_shared_computation_prop_map(
     by_date_diff: dict[date, dict[str, int]] = defaultdict(lambda: defaultdict(int))
     for project_name, samples in sample_sizes_by_project.items():
         for sample_obj in samples:
-            sample_id = sample_obj['sample']
             sizes_dates: list[tuple[datetime.date, int]] = []
             for obj in sample_obj['dates']:
                 size = sum(obj['size'].values())
