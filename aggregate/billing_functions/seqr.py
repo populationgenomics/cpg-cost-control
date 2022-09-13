@@ -47,8 +47,6 @@ from sample_metadata.model.analysis_type import AnalysisType
 from sample_metadata.model.analysis_status import AnalysisStatus
 from sample_metadata.model.analysis_query_model import AnalysisQueryModel
 
-from aggregate.billing_functions.utils import parse_date_only_string
-
 try:
     from . import utils
 except ImportError:
@@ -439,8 +437,8 @@ async def generate_proportionate_maps_of_datasets(
 
     # Let's get the file size for each sample in all project, then we can determine
     # by-use-case how much each sample / project should be responsible for the cost
-    sample_file_sizes_by_project = aapi.get_sample_file_sizes_async(
-        project_names=projects, start_date=str(start.date), end_date=str(end.date)
+    sample_file_sizes_by_project = await aapi.get_sample_file_sizes_async(
+        project_names=projects, start_date=str(start.date()), end_date=str(end.date())
     )
     # this looks like {'dataset': [{"sample_id": "CPG123", "dates": [...]}, ...]}
     file_sizes_by_project: dict[str, list[dict]] = {
@@ -574,7 +572,7 @@ def get_seqr_hosting_prop_map_from(
             sizes_dates: list[tuple[datetime.date, int]] = []
             for obj in sample_obj['dates']:
                 size = sum(obj['size'].values())
-                start_date = parse_date_only_string(obj['start'])
+                start_date = utils.parse_date_only_string(obj['start'])
                 if len(sizes_dates) > 0:
                     # subtract last size to get the difference
                     # if the crams got smaller, this number will be negative
@@ -675,7 +673,7 @@ def get_shared_computation_prop_map(
             sizes_dates: list[tuple[datetime.date, int]] = []
             for obj in sample_obj['dates']:
                 size = sum(obj['size'].values())
-                start_date = parse_date_only_string(obj['start'])
+                start_date = utils.parse_date_only_string(obj['start'])
                 if start_date > max_datetime.date():
                     continue
                 if len(sizes_dates) > 0:
@@ -837,20 +835,5 @@ def from_pubsub(data=None, _=None):
 if __name__ == '__main__':
     test_start, test_end = None, None
 
-    test_start, test_end = datetime(2022, 5, 1), datetime(2022, 6, 1)
-    # asyncio.new_event_loop().run_until_complete(main(start=test_start, end=test_end))
-
-    # # 2022-05-17 03:17:40
-    # test_start, test_end = datetime(2022, 3, 1), datetime(2022, 6, 1)
-    prjcts = get_seqr_datasets()
-
-    a, b = asyncio.new_event_loop().run_until_complete(
-        generate_proportionate_maps_of_datasets(test_start, test_end, prjcts)
-    )
-
-    print(a)
-    print(b)
-
-    # asyncio.new_event_loop().run_until_complete(
-    #     main(start=test_start, end=test_end, dry_run=False)
-    # )
+    test_start, test_end = datetime(2021, 8, 1), datetime(2022, 8, 1)
+    asyncio.new_event_loop().run_until_complete(main(start=test_start, end=test_end))
