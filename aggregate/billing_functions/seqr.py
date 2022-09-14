@@ -745,7 +745,8 @@ def get_ratios_from_date(
 
     >>> get_ratios_from_date(
     ...     datetime(2023, 1, 13),
-    ...     [(datetime(2022,12,31), {'d1': (1.0, 1)}), (datetime(2023,1,12), {'d1': (1.0, 2)})]
+    ...     [(datetime(2022,12,31), {'d1': (1.0, 1)}),
+    ...      (datetime(2023,1,12), {'d1': (1.0, 2)})]
     ... )
     (datetime.datetime(2023, 1, 12, 0, 0), {'d1': (1.0, 2)})
 
