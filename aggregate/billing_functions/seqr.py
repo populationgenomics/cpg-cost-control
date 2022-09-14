@@ -53,9 +53,9 @@ except ImportError:
     import utils
 
 
-# ie: [(datetime, {[dataset]: fractional_breakdown})}
-# eg: [('2022-01-06', {'d1': 0.3, 'd2': 0.5, 'd3': 0.2})]
-ProportionateMapType = list[tuple[datetime, dict[str, float]]]
+# ie: [(datetime, {[dataset]: (fractional_breakdown, size_of_dataset (bytes))})}
+# eg: [('2022-01-06', {'d1': (0.3, 30TB), 'd2': (0.5, 50TB, 'd3': (0.2, 20TB)})]
+ProportionateMapType = list[tuple[datetime, dict[str, tuple[float, int]]]]
 
 SERVICE_ID = 'seqr'
 SEQR_HAIL_BILLING_PROJECT = 'seqr'
@@ -100,7 +100,7 @@ def get_finalised_entries_for_batch(
     # Assign all seqr cost to seqr topic before first ever load
     # Otherwise, determine proportion cost across topics
     if start_time < SEQR_FIRST_LOAD:
-        prop_map = {'seqr': 1.0}
+        prop_map = {'seqr': (1.0, 1)}
     else:
         _, prop_map = get_ratios_from_date(start_time, proportion_map)
 
@@ -162,7 +162,7 @@ def get_finalised_entries_for_batch(
                 currency_conversion_rate, batch_resource, usage
             )
 
-            for dataset, fraction in prop_map.items():
+            for dataset, (fraction, dataset_size) in prop_map.items():
                 # Distribute the remaining cost across all datasets proportionately
                 key = '-'.join(
                     (
@@ -193,6 +193,7 @@ def get_finalised_entries_for_batch(
                             'dataset': dataset,
                             # awkward way to round to 2 decimal places in Python
                             'fraction': round(100 * fraction) / 100,
+                            'dataset_size': dataset_size,
                         },
                     )
                 )
@@ -300,6 +301,8 @@ def migrate_entries_from_bq(
     """
 
     logger.debug('Migrating seqr data to BQ')
+    result = 0
+
     for istart, iend in utils.get_date_intervals_for(start, end):
         logger.info(
             f'Migrating seqr BQ data [{istart.isoformat()}, {iend.isoformat()}]'
@@ -330,7 +333,6 @@ def migrate_entries_from_bq(
         json_obj = json.loads(df.to_json(orient='records'))
 
         entries_by_id = {}
-        result = 0
         param_map, current_date = None, None
         for obj in json_obj:
 
@@ -349,19 +351,23 @@ def migrate_entries_from_bq(
             # Assign all seqr cost to seqr topic before first ever load
             # Otherwise, determine proportion cost across topics
             if usage_start_time < SEQR_FIRST_LOAD:
-                param_map = {'seqr': 1.0}
+                param_map = {'seqr': (1.0, 1)}
             elif current_date is None or usage_start_time > current_date:
                 current_date, param_map = get_ratios_from_date(
                     dt=usage_start_time, prop_map=prop_map
                 )
 
-            for dataset, ratio in param_map.items():
+            for dataset, (ratio, dataset_size) in param_map.items():
 
                 new_entry = {**obj}
 
                 new_entry['topic'] = dataset
                 new_entry['service']['id'] = SERVICE_ID
-                new_entry['labels'] = [*labels, {'key': 'proportion', 'value': ratio}]
+                new_entry['labels'] = [
+                    *labels,
+                    {'key': 'proportion', 'value': ratio},
+                    {{'key': 'dataset_size', 'value': dataset_size}},
+                ]
                 new_entry['cost'] *= ratio
 
                 dates = ['usage_start_time', 'usage_end_time', 'export_time']
@@ -624,7 +630,7 @@ def get_seqr_hosting_prop_map_from(
             (
                 dt,
                 {
-                    project: size / total_size
+                    project: (size / total_size, size)
                     for project, size in size_per_project.items()
                 },
             )
@@ -709,7 +715,8 @@ def get_shared_computation_prop_map(
     for dt, project_map in by_date_totals:
         total_size = sum(project_map.values())
         prop_project_map = {
-            project_id: size / total_size for project_id, size in project_map.items()
+            project_id: (size / total_size, size)
+            for project_id, size in project_map.items()
         }
         prop_map.append((datetime.combine(dt, datetime.min.time()), prop_project_map))
 
@@ -718,30 +725,31 @@ def get_shared_computation_prop_map(
 
 def get_ratios_from_date(
     dt: datetime, prop_map: ProportionateMapType
-) -> tuple[datetime, dict[str, float]]:
+) -> tuple[datetime, dict[str, tuple[float, int]]]:
     """
     From the prop_map, get the ratios for the applicable date.
 
     >>> get_ratios_from_date(
     ...     datetime(2020, 1, 1),
-    ...     [(datetime(2020,12,31), {'d1': 1.0})]
+    ...     [(datetime(2020,12,31), {'d1': (1.0, 1)})]
     ... )
     (datetime.datetime(2020, 1, 1, 0, 0), {})
 
     >>> get_ratios_from_date(
     ...     datetime(2023, 1, 1),
-    ...     [(datetime(2022,12,31), {'d1': 1.0})]
+    ...     [(datetime(2020,12,31), {'d1': (1.0, 1)})]
     ... )
-    (datetime.datetime(2022, 12, 31, 0, 0), {'d1': 1.0})
+    (datetime.datetime(2022, 12, 31, 0, 0), {'d1': (1.0, 1)})
 
     >>> get_ratios_from_date(
     ...     datetime(2023, 1, 13),
-    ...     [(datetime(2022,12,31), {'d1': 1.0}), (datetime(2023,1,12), {'d1': 1.0})]
+    ...     [(datetime(2022,12,31), {'d1': (1.0, 1)}),
+    ...      (datetime(2023,1,12), {'d1': (1.0, 2)})]
     ... )
-    (datetime.datetime(2023, 1, 12, 0, 0), {'d1': 1.0})
+    (datetime.datetime(2023, 1, 12, 0, 0), {'d1': (1.0, 2)})
 
     >>> get_ratios_from_date(
-    ...     datetime(2023, 1, 1), [(datetime(2023,1,2), {'d1': 1.0})]
+    ...     datetime(2023, 1, 1), [(datetime(2023,1,2), {'d1': (1.0, 1)})]
     ... )
     Traceback (most recent call last):
     ...

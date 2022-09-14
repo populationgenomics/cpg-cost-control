@@ -62,7 +62,7 @@ class TestSeqrHostingPropMapFunctionality(unittest.TestCase):
             relevant_analyses=analyses, sample_sizes_by_project=sample_sizes_by_project
         )
 
-        prop_map_expected = {'DS1': 0.25, 'DS2': 0.75}
+        prop_map_expected = {'DS1': (0.25, 1), 'DS2': (0.75, 3)}
         self.assertEqual(1, len(prop_map))
         # noting that the propmap wipes two days off the analysis date
         # to cover analysis covered to generate the propmap
@@ -106,19 +106,25 @@ class TestSeqrHostingPropMapFunctionality(unittest.TestCase):
         # 2 + 5:    7/15 => 0.466...
         # 3:        3/15 => 0.2
         prop_map1 = prop_map[0][1]
-        self.assertAlmostEqual(0.33333, prop_map1['DS1'], places=3)
-        self.assertAlmostEqual(0.46666, prop_map1['DS2'], places=3)
-        self.assertAlmostEqual(0.2, prop_map1['DS3'])
-        self.assertEqual(1, sum(prop_map1.values()))
+        self.assertAlmostEqual(0.33333, prop_map1['DS1'][0], places=3)
+        self.assertEqual(5, prop_map1['DS1'][1])
+        self.assertAlmostEqual(0.46666, prop_map1['DS2'][0], places=3)
+        self.assertEqual(7, prop_map1['DS2'][1])
+        self.assertAlmostEqual(0.2, prop_map1['DS3'][0])
+        self.assertEqual(3, prop_map1['DS3'][1])
+        self.assertEqual(1, sum(v[0] for v in prop_map1.values()))
 
         # 1 + 4 + 7 + 10:   22/55 => 0.4
         # 2 + 5 + 8:        15/55 => 0.27...
         # 3 + 6 + 9:        18/55 => 0.3272...
         prop_map2 = prop_map[1][1]
-        self.assertEqual(1, sum(prop_map1.values()))
-        self.assertAlmostEqual(0.4, prop_map2['DS1'])
-        self.assertAlmostEqual(0.272727, prop_map2['DS2'], places=3)
-        self.assertAlmostEqual(0.327272, prop_map2['DS3'], places=3)
+        self.assertEqual(1, sum(v[0] for v in prop_map1.values()))
+        self.assertAlmostEqual(0.4, prop_map2['DS1'][0])
+        self.assertEqual(22, prop_map2['DS1'][1])
+        self.assertAlmostEqual(0.272727, prop_map2['DS2'][0], places=3)
+        self.assertEqual(15, prop_map2['DS2'][1])
+        self.assertAlmostEqual(0.327272, prop_map2['DS3'][0], places=3)
+        self.assertEqual(18, prop_map2['DS3'][1])
 
 
 class TestSeqrGetFinalisedEntriesForBatch(unittest.TestCase):
@@ -238,8 +244,8 @@ class TestSeqrComputationPropMap(unittest.TestCase):
 
         self.assertEqual(2, len(prop_map))
 
-        self.assertDictEqual({'DS1': 1.0}, prop_map[0][1])
-        self.assertDictEqual({'DS1': 0.25, 'DS2': 0.75}, prop_map[1][1])
+        self.assertDictEqual({'DS1': (1.0, 1)}, prop_map[0][1])
+        self.assertDictEqual({'DS1': (0.25, 1), 'DS2': (0.75, 3)}, prop_map[1][1])
 
     def test_seqr_computation_prop_map_more_complex(self):
         """
@@ -268,9 +274,12 @@ class TestSeqrComputationPropMap(unittest.TestCase):
         #   2 + 5 + 8:        15/55 => 0.27...
         #   3 + 6 + 9:        18/55 => 0.3272...
         prop_map_last = prop_map[-1][1]
-        self.assertEqual(0.4, prop_map_last['DS1'])
-        self.assertAlmostEqual(0.272727, prop_map_last['DS2'], places=3)
-        self.assertAlmostEqual(0.327272, prop_map_last['DS3'], places=3)
+        self.assertEqual(0.4, prop_map_last['DS1'][0])
+        self.assertEqual(22, prop_map_last['DS1'][1])
+        self.assertAlmostEqual(0.272727, prop_map_last['DS2'][0], places=3)
+        self.assertEqual(15, prop_map_last['DS2'][1])
+        self.assertAlmostEqual(0.327272, prop_map_last['DS3'][0], places=3)
+        self.assertEqual(18, prop_map_last['DS3'][1])
 
     def test_seqr_computation_prop_map_condensed(self):
         """
