@@ -843,5 +843,5 @@ def from_pubsub(data=None, _=None):
 if __name__ == '__main__':
     test_start, test_end = None, None
 
-    test_start, test_end = datetime(2021, 8, 1), datetime(2022, 8, 1)
+    test_start, test_end = datetime(2022, 6, 1), datetime(2022, 8, 1)
     asyncio.new_event_loop().run_until_complete(main(start=test_start, end=test_end))
