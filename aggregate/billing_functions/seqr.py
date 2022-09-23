@@ -29,11 +29,11 @@ TO DO :
 """
 
 
-# write some code here
-
 import json
 import asyncio
 import hashlib
+import logging
+
 from collections import defaultdict
 from datetime import datetime, timedelta, date
 
@@ -76,6 +76,7 @@ JOB_ATTRIBUTES_IGNORE = {'name', 'dataset', 'samples'}
 
 
 logger = utils.logger
+logger = logger.getChild('seqr')
 
 papi = ProjectApi()
 sapi = SampleApi()
@@ -366,7 +367,7 @@ def migrate_entries_from_bq(
                 new_entry['labels'] = [
                     *labels,
                     {'key': 'proportion', 'value': ratio},
-                    {{'key': 'dataset_size', 'value': dataset_size}},
+                    {'key': 'dataset_size', 'value': dataset_size},
                 ]
                 new_entry['cost'] *= ratio
 
@@ -841,7 +842,10 @@ def from_pubsub(data=None, _=None):
 
 
 if __name__ == '__main__':
-    test_start, test_end = None, None
+    logger.setLevel(logging.INFO)
+    logging.getLogger('google').setLevel(logging.WARNING)
+    logging.getLogger('asyncio').setLevel(logging.ERROR)
+    logging.getLogger('urllib3').setLevel(logging.WARNING)
 
-    test_start, test_end = datetime(2022, 6, 1), datetime(2022, 8, 1)
+    test_start, test_end = datetime(2022, 8, 1), datetime(2022, 8, 4)
     asyncio.new_event_loop().run_until_complete(main(start=test_start, end=test_end))

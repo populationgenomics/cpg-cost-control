@@ -4,17 +4,18 @@ Class of helper functions for billing aggregate functions
 """
 import os
 import re
+import sys
 import math
 import json
+import asyncio
 import logging
+
 from pathlib import Path
 from io import StringIO
 from collections import defaultdict
 from datetime import date, datetime, timedelta
-import sys
 from typing import Any, Iterator, Sequence, TypeVar, Iterable
 
-import asyncio
 import aiohttp
 import pandas as pd
 import google.cloud.bigquery as bq
@@ -23,7 +24,7 @@ from cpg_utils.cloud import read_secret
 from google.api_core.exceptions import ClientError
 
 
-logger = logging.getLogger('Cost Aggregate')
+logger = logging.getLogger('cost-aggregate')
 
 handler = logging.StreamHandler(sys.stderr)
 handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s: %(message)s'))
@@ -601,11 +602,17 @@ def upsert_rows_into_bigquery(
         nrows = len(filtered_obj)
 
         if nrows == 0:
-            logger.info(f'Not inserting any rows (0/{len(chunked_objs)})')
+            logger.info(
+                f'Not inserting any rows 0/{len(chunked_objs)} '
+                f'({chunk_idx+1}/{n_chunks} chunk)'
+            )
             continue
 
         if dry_run:
-            logger.info(f'DRY_RUN: Inserting {nrows}/{len(chunked_objs)} rows')
+            logger.info(
+                f'DRY_RUN: Inserting {nrows}/{len(chunked_objs)} rows '
+                f'({chunk_idx+1}/{n_chunks} chunk)'
+            )
             inserts += nrows
             continue
 
@@ -748,7 +755,6 @@ def _generate_hail_resource_cost_lookup():
         ('service-fee/1', rate_cpu_hour_to_mcpu_msec(0.01)),
     ]
     s = json.dumps(dict(rates))
-    print(s)
     return s
 
 

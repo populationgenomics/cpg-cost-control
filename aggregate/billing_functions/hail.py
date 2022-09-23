@@ -22,6 +22,8 @@ Tasks:
 """
 import json
 import asyncio
+import logging
+
 from collections import defaultdict
 from datetime import datetime
 from typing import Dict, List
@@ -39,6 +41,7 @@ EXCLUDED_BATCH_PROJECTS = {'hail', 'seqr'}
 
 
 logger = utils.logger
+logger = logger.getChild('hail')
 
 
 def get_billing_projects():
@@ -88,10 +91,6 @@ def get_finalised_entries_for_batch(batch: dict) -> List[Dict]:
             'batch_resource': batch_resource,
             'batch_name': attributes.get('name'),
         }
-
-        logger.info(batch_id)
-        if batch_id == 97645:
-            logger.info('hi')
 
         # Add all batch attributes, removing any duped labels
         labels.update(attributes)
@@ -173,7 +172,10 @@ async def main(
 
 
 if __name__ == '__main__':
-    test_start, test_end = None, None
-    test_start, test_end = datetime(2022, 7, 28), datetime(2022, 7, 29)
+    logger.setLevel(logging.INFO)
+    logging.getLogger('google').setLevel(logging.WARNING)
+    logging.getLogger('asyncio').setLevel(logging.ERROR)
+    logging.getLogger('urllib3').setLevel(logging.WARNING)
 
+    test_start, test_end = datetime(2022, 8, 1), datetime(2022, 9, 1)
     asyncio.new_event_loop().run_until_complete(main(start=test_start, end=test_end))
