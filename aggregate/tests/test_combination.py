@@ -57,7 +57,7 @@ class TestCombinationCosts(unittest.TestCase):
         """
         mock_currency_conversion_rate.return_value = 2.0
 
-        prop_map = [(datetime(2023, 1, 1), {'DS1': 0.3, 'DS2': 0.7})]
+        prop_map = [(datetime(2023, 1, 1), {'DS1': (0.3, 300), 'DS2': (0.7, 700)})]
 
         seqr_entries = seqr_finalise_batch(batch, prop_map)
         hail_entries = hail_finalise_batch(batch)

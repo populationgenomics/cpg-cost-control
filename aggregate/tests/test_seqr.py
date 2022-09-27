@@ -144,7 +144,7 @@ class TestSeqrGetFinalisedEntriesForBatch(unittest.TestCase):
         # mock currency_conversion request to avoid hitting BQ
         mock_currency_conversion_rate.return_value = 2.0
 
-        prop_map = [(datetime(2023, 1, 1), {'DS1': 0.25, 'DS2': 0.75})]
+        prop_map = [(datetime(2023, 1, 1), {'DS1': (0.25, 250), 'DS2': (0.75, 750)})]
         resources = {
             'compute/n1-preemptible/1': 1e6,
             'memory/n1-preemptible/1': 1e6,

@@ -731,16 +731,10 @@ def get_ratios_from_date(
     From the prop_map, get the ratios for the applicable date.
 
     >>> get_ratios_from_date(
-    ...     datetime(2020, 1, 1),
-    ...     [(datetime(2020,12,31), {'d1': (1.0, 1)})]
-    ... )
-    (datetime.datetime(2020, 1, 1, 0, 0), {})
-
-    >>> get_ratios_from_date(
     ...     datetime(2023, 1, 1),
     ...     [(datetime(2020,12,31), {'d1': (1.0, 1)})]
     ... )
-    (datetime.datetime(2022, 12, 31, 0, 0), {'d1': (1.0, 1)})
+    (datetime.datetime(2020, 12, 31, 0, 0), {'d1': (1.0, 1)})
 
     >>> get_ratios_from_date(
     ...     datetime(2023, 1, 13),
@@ -750,11 +744,18 @@ def get_ratios_from_date(
     (datetime.datetime(2023, 1, 12, 0, 0), {'d1': (1.0, 2)})
 
     >>> get_ratios_from_date(
-    ...     datetime(2023, 1, 1), [(datetime(2023,1,2), {'d1': (1.0, 1)})]
+    ...     datetime(2023, 1, 3),
+    ...     [(datetime(2023,1,2), {'d1': (1.0, 1)})]
+    ... )
+    (datetime.datetime(2023, 1, 2, 0, 0), {'d1': (1.0, 1)})
+
+    >>> get_ratios_from_date(
+    ...     datetime(2020, 1, 1),
+    ...     [(datetime(2020,12,31), {'d1': (1.0, 1)})]
     ... )
     Traceback (most recent call last):
     ...
-    AssertionError: No ratio found for date 2023-01-01 00:00:00
+    AssertionError: No ratio found for date 2020-01-01 00:00:00
     """
     assert isinstance(dt, datetime)
 
@@ -847,5 +848,5 @@ if __name__ == '__main__':
     logging.getLogger('asyncio').setLevel(logging.ERROR)
     logging.getLogger('urllib3').setLevel(logging.WARNING)
 
-    test_start, test_end = datetime(2022, 8, 4), datetime(2022, 8, 15)
+    test_start, test_end = datetime(2022, 8, 10), datetime(2022, 8, 15)
     asyncio.new_event_loop().run_until_complete(main(start=test_start, end=test_end))
