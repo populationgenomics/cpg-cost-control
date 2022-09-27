@@ -847,5 +847,5 @@ if __name__ == '__main__':
     logging.getLogger('asyncio').setLevel(logging.ERROR)
     logging.getLogger('urllib3').setLevel(logging.WARNING)
 
-    test_start, test_end = datetime(2022, 8, 1), datetime(2022, 8, 4)
+    test_start, test_end = datetime(2022, 8, 4), datetime(2022, 8, 15)
     asyncio.new_event_loop().run_until_complete(main(start=test_start, end=test_end))
