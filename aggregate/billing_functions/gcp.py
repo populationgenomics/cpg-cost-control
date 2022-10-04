@@ -15,10 +15,13 @@ Tasks:
 """
 
 import json
+import asyncio
 import hashlib
+import logging
 
-from datetime import datetime
 from typing import Dict
+from datetime import datetime
+
 from pandas import DataFrame
 
 from cpg_utils.cloud import read_secret
@@ -31,6 +34,7 @@ except ImportError:
 
 
 logger = utils.logger
+logger = logger.getChild('gcp')
 
 
 ##########################
@@ -59,19 +63,21 @@ def from_pubsub(data, _):
 #################
 
 
-def migrate_billing_data(start, end, dataset_to_topic) -> int:
+async def migrate_billing_data(start, end, dataset_to_topic) -> int:
     """
     Gets the billing date in the time period
     Filter out any rows that aren't in the allowed project ids
     :return: The number of migrated rows
     """
 
+    logger.info(f'Migrating data from {start} to {end}')
+
     def get_topic(row):
         return utils.billing_row_to_topic(row, dataset_to_topic)
 
     migrate_rows = get_billing_data(start, end)
 
-    if not migrate_rows:
+    if len(migrate_rows) == 0:
         logger.info('No rows to migrate')
         return 0
 
@@ -142,7 +148,7 @@ def get_dataset_to_topic_map() -> Dict[str, str]:
 ##############
 
 
-def main(start: datetime = None, end: datetime = None) -> int:
+async def main(start: datetime = None, end: datetime = None) -> int:
     """Main body function"""
     interval_iterator = utils.get_date_intervals_for(start, end)
 
@@ -154,10 +160,13 @@ def main(start: datetime = None, end: datetime = None) -> int:
     # This is because depending on the start-end interval all of the billing
     # data may not be able to be held in memory during the migration
     # Memory is particularly limited for cloud functions
-    result = 0
-    for begin, finish in interval_iterator:
-        logger.info(f'Migrating data from {begin} to {finish}')
-        result += migrate_billing_data(begin, finish, dataset_to_topic_map)
+    results = [
+        migrate_billing_data(begin, finish, dataset_to_topic_map)
+        for begin, finish in interval_iterator
+    ]
+
+    results = await asyncio.gather(*results)
+    result = sum(results)
 
     logger.info(f'Migrated a total of {result} rows')
 
@@ -165,4 +174,11 @@ def main(start: datetime = None, end: datetime = None) -> int:
 
 
 if __name__ == '__main__':
-    main()
+    # Set logging levels
+    logger.setLevel(logging.INFO)
+    logging.getLogger('google').setLevel(logging.WARNING)
+    logging.getLogger('asyncio').setLevel(logging.ERROR)
+    logging.getLogger('urllib3').setLevel(logging.WARNING)
+
+    test_start, test_end = datetime(2022, 8, 1), datetime(2022, 9, 1)
+    asyncio.new_event_loop().run_until_complete(main(start=test_start, end=test_end))

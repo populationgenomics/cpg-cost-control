@@ -4,17 +4,18 @@ Class of helper functions for billing aggregate functions
 """
 import os
 import re
+import sys
 import math
 import json
+import asyncio
 import logging
+
 from pathlib import Path
 from io import StringIO
 from collections import defaultdict
-from datetime import datetime, timedelta
-import sys
+from datetime import date, datetime, timedelta
 from typing import Any, Iterator, Sequence, TypeVar, Iterable
 
-import asyncio
 import aiohttp
 import pandas as pd
 import google.cloud.bigquery as bq
@@ -23,14 +24,18 @@ from cpg_utils.cloud import read_secret
 from google.api_core.exceptions import ClientError
 
 
-logger = logging.getLogger('Cost Aggregate')
+logger = logging.getLogger('cost-aggregate')
 
 handler = logging.StreamHandler(sys.stderr)
 handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s: %(message)s'))
 
 logger.addHandler(handler)
-if os.getenv('DEV') in ('1', 'true', 'yes'):
-    logger.setLevel(logging.DEBUG)
+if os.getenv('DEBUG') in ('1', 'true', 'yes') or os.getenv('DEV') in (
+    '1',
+    'true',
+    'yes',
+):
+    logger.setLevel(logging.INFO)
 
 # pylint: disable=invalid-name
 T = TypeVar('T')
@@ -203,6 +208,17 @@ def get_formatted_bq_schema() -> list[bq.SchemaField]:
     return _format_bq_schema_json(get_bq_schema_json())
 
 
+def parse_date_only_string(d: str | None) -> date | None:
+    """Convert date string to date, allow for None"""
+    if not d:
+        return None
+
+    try:
+        return datetime.strptime(d, '%Y-%m-%d').date()
+    except Exception as excep:
+        raise ValueError(f'Date could not be converted: {d}') from excep
+
+
 def parse_hail_time(time_str: str) -> datetime:
     """
     Parse hail datetime object
@@ -213,7 +229,16 @@ def parse_hail_time(time_str: str) -> datetime:
     if isinstance(time_str, datetime):
         return time_str
 
-    return datetime.strptime(time_str, '%Y-%m-%dT%H:%M:%SZ')
+    if time_str is None:
+        return None
+
+    for fmt in ('%Y-%m-%dT%H:%M:%S', '%Y-%m-%dT%H:%M:%SZ'):
+        try:
+            return datetime.strptime(time_str, fmt)
+        except ValueError:
+            pass
+
+    raise ValueError(f'Could not convert date {time_str}')
 
 
 def to_bq_time(time: datetime):
@@ -577,11 +602,17 @@ def upsert_rows_into_bigquery(
         nrows = len(filtered_obj)
 
         if nrows == 0:
-            logger.info(f'Not inserting any rows (0/{len(chunked_objs)})')
+            logger.info(
+                f'Not inserting any rows 0/{len(chunked_objs)} '
+                f'({chunk_idx+1}/{n_chunks} chunk)'
+            )
             continue
 
         if dry_run:
-            logger.info(f'DRY_RUN: Inserting {nrows}/{len(chunked_objs)} rows')
+            logger.info(
+                f'DRY_RUN: Inserting {nrows}/{len(chunked_objs)} rows '
+                f'({chunk_idx+1}/{n_chunks} chunk)'
+            )
             inserts += nrows
             continue
 
@@ -624,16 +655,18 @@ def upsert_aggregated_dataframe_into_bigquery(
     It must respect the schema defined in get_bq_schema_json().
     """
 
+    # Cannot use query parameters for table names
+    # https://cloud.google.com/bigquery/docs/parameterized-queries
     _query = f"""
-        SELECT id FROM @table
+        SELECT id FROM {table}
         WHERE id IN UNNEST(@ids);
     """
     job_config = bq.QueryJobConfig(
         query_parameters=[
-            bq.ArrayQueryParameter('table', 'STRING', table),
             bq.ArrayQueryParameter('ids', 'STRING', list(set(df['id']))),
         ]
     )
+
     result = get_bigquery_client().query(_query, job_config=job_config).result()
     existing_ids = set(result.to_dataframe()['id'])
 
@@ -722,7 +755,6 @@ def _generate_hail_resource_cost_lookup():
         ('service-fee/1', rate_cpu_hour_to_mcpu_msec(0.01)),
     ]
     s = json.dumps(dict(rates))
-    print(s)
     return s
 
 

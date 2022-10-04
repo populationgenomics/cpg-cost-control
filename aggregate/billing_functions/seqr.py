@@ -1,4 +1,4 @@
-# pylint: disable=logging-format-interpolation
+# pylint: disable=logging-format-interpolation,too-many-locals,too-many-branches
 """
 This cloud function runs DAILY, and distributes the cost of
 SEQR on the sample size within SEQR.
@@ -29,11 +29,11 @@ TO DO :
 """
 
 
-# write some code here
-
 import json
 import asyncio
 import hashlib
+import logging
+
 from collections import defaultdict
 from datetime import datetime, timedelta, date
 
@@ -53,13 +53,15 @@ except ImportError:
     import utils
 
 
-# ie: [(datetime, {[dataset]: fractional_breakdown})}
-# eg: [('2022-01-06', {'d1': 0.3, 'd2': 0.5, 'd3': 0.2})]
-ProportionateMapType = list[tuple[datetime, dict[str, float]]]
+# ie: [(datetime, {[dataset]: (fractional_breakdown, size_of_dataset (bytes))})}
+# eg: [('2022-01-06', {'d1': (0.3, 30TB), 'd2': (0.5, 50TB, 'd3': (0.2, 20TB)})]
+ProportionateMapType = list[tuple[datetime, dict[str, tuple[float, int]]]]
 
 SERVICE_ID = 'seqr'
 SEQR_HAIL_BILLING_PROJECT = 'seqr'
-ES_ANALYSIS_OBJ_INTRO_DATE = datetime(2022, 6, 10)
+ES_ANALYSIS_OBJ_INTRO_DATE = datetime(2022, 12, 31)
+
+SEQR_FIRST_LOAD = datetime(2021, 9, 1)
 
 GCP_BILLING_BQ_TABLE = (
     'billing-admin-290403.billing.gcp_billing_export_v1_01D012_20A6A2_CBD343'
@@ -70,7 +72,11 @@ BASE = 'https://batch.hail.populationgenomics.org.au'
 BATCHES_API = BASE + '/api/v1alpha/batches'
 JOBS_API = BASE + '/api/v1alpha/batches/{batch_id}/jobs/resources'
 
+JOB_ATTRIBUTES_IGNORE = {'name', 'dataset', 'samples'}
+
+
 logger = utils.logger
+logger = logger.getChild('seqr')
 
 papi = ProjectApi()
 sapi = SampleApi()
@@ -86,12 +92,18 @@ def get_finalised_entries_for_batch(
     """
 
     batch_id = batch['id']
-    attributes = batch.get('attributes', {})
-    batch_name = attributes.get('name')
+    batch_attributes = batch.get('attributes', {})
+    batch_name = batch_attributes.get('name')
 
     start_time = utils.parse_hail_time(batch['time_created'])
     end_time = utils.parse_hail_time(batch['time_completed'])
-    _, prop_map = get_ratios_from_date(start_time, proportion_map)
+
+    # Assign all seqr cost to seqr topic before first ever load
+    # Otherwise, determine proportion cost across topics
+    if start_time < SEQR_FIRST_LOAD:
+        prop_map = {'seqr': (1.0, 1)}
+    else:
+        _, prop_map = get_ratios_from_date(start_time, proportion_map)
 
     currency_conversion_rate = utils.get_currency_conversion_rate_for_time(start_time)
 
@@ -137,9 +149,12 @@ def get_finalised_entries_for_batch(
                 'url': hail_ui_url,
             }
 
-            # Add all batch attributes, removing any duped labels
-            labels.update(attributes)
-            labels.pop('name')
+            for k, v in job.get('attributes', {}).items():
+                if k in JOB_ATTRIBUTES_IGNORE:
+                    continue
+                if k == 'stage' and not v:
+                    logger.info('Empty stage')
+                labels[k] = str(v)
 
             # Remove any labels with falsey values e.g. None, '', 0
             labels = dict(filter(lambda l: l[1], labels.items()))
@@ -148,7 +163,7 @@ def get_finalised_entries_for_batch(
                 currency_conversion_rate, batch_resource, usage
             )
 
-            for dataset, fraction in prop_map.items():
+            for dataset, (fraction, dataset_size) in prop_map.items():
                 # Distribute the remaining cost across all datasets proportionately
                 key = '-'.join(
                     (
@@ -179,6 +194,7 @@ def get_finalised_entries_for_batch(
                             'dataset': dataset,
                             # awkward way to round to 2 decimal places in Python
                             'fraction': round(100 * fraction) / 100,
+                            'dataset_size': dataset_size,
                         },
                     )
                 )
@@ -209,7 +225,6 @@ def get_finalised_entries_for_dataset_batch_and_job(
 
     job_id = job['job_id']
     job_name = job['attributes'].get('name')
-    sample = job['attributes'].get('sample')
 
     hail_ui_url = utils.HAIL_UI_URL.replace('{batch_id}', str(batch_id))
 
@@ -220,8 +235,16 @@ def get_finalised_entries_for_dataset_batch_and_job(
         'batch_id': str(batch_id),
         'job_id': str(job_id),
     }
-    if sample:
-        labels['sample'] = sample
+
+    for k, v in job.get('attributes', {}).items():
+        if k in JOB_ATTRIBUTES_IGNORE:
+            continue
+        if k == 'stage' and not v:
+            logger.info('Empty stage')
+        labels[k] = str(v)
+
+    # Remove any labels with falsey values e.g. None, '', 0
+    labels = dict(filter(lambda l: l[1], labels.items()))
 
     resources = job['resources']
     if not resources:
@@ -279,6 +302,8 @@ def migrate_entries_from_bq(
     """
 
     logger.debug('Migrating seqr data to BQ')
+    result = 0
+
     for istart, iend in utils.get_date_intervals_for(start, end):
         logger.info(
             f'Migrating seqr BQ data [{istart.isoformat()}, {iend.isoformat()}]'
@@ -309,7 +334,6 @@ def migrate_entries_from_bq(
         json_obj = json.loads(df.to_json(orient='records'))
 
         entries_by_id = {}
-        result = 0
         param_map, current_date = None, None
         for obj in json_obj:
 
@@ -325,19 +349,26 @@ def migrate_entries_from_bq(
                 int(obj['usage_start_time'] / 1000)
             )
 
-            if current_date is None or usage_start_time > current_date:
-                # use and abuse the
+            # Assign all seqr cost to seqr topic before first ever load
+            # Otherwise, determine proportion cost across topics
+            if usage_start_time < SEQR_FIRST_LOAD:
+                param_map = {'seqr': (1.0, 1)}
+            elif current_date is None or usage_start_time > current_date:
                 current_date, param_map = get_ratios_from_date(
                     dt=usage_start_time, prop_map=prop_map
                 )
 
-            for dataset, ratio in param_map.items():
+            for dataset, (ratio, dataset_size) in param_map.items():
 
                 new_entry = {**obj}
 
                 new_entry['topic'] = dataset
                 new_entry['service']['id'] = SERVICE_ID
-                new_entry['labels'] = [*labels, {'key': 'proportion', 'value': ratio}]
+                new_entry['labels'] = [
+                    *labels,
+                    {'key': 'proportion', 'value': ratio},
+                    {'key': 'dataset_size', 'value': dataset_size},
+                ]
                 new_entry['cost'] *= ratio
 
                 dates = ['usage_start_time', 'usage_end_time', 'export_time']
@@ -405,26 +436,43 @@ async def generate_proportionate_maps_of_datasets(
     filtered_projects = list(set(sm_pid_to_dataset.values()).intersection(projects))
     missing_projects = set(projects) - set(sm_pid_to_dataset.values())
     if missing_projects:
-        logger.warning(
+        raise ValueError(
             f'The datasets {", ".join(missing_projects)} were not found in SM'
         )
 
-    analyses, crams = await get_analysis_objects_and_crams_for_seqr_prop_map(
-        start, end, filtered_projects
+    logger.info(f'Getting proportionate map for projects: {filtered_projects}')
+
+    # Let's get the file size for each sample in all project, then we can determine
+    # by-use-case how much each sample / project should be responsible for the cost
+    sample_file_sizes_by_project = await aapi.get_sample_file_sizes_async(
+        project_names=projects, start_date=str(start.date()), end_date=str(end.date())
     )
-    seqr_map = get_seqr_hosting_prop_map_from(
-        analyses, crams, project_id_map=sm_pid_to_dataset
-    )
-    hail_map = get_shared_computation_prop_map(
-        crams, project_id_map=sm_pid_to_dataset, min_datetime=start, max_datetime=end
+    # this looks like {'dataset': [{"sample_id": "CPG123", "dates": [...]}, ...]}
+    file_sizes_by_project: dict[str, list[dict]] = {
+        p['project']: p['samples'] for p in sample_file_sizes_by_project
+    }
+
+    # these are used to determine if a sample is _in_ seqr.
+    joint_call_analyses = await get_analysis_objects_for_seqr_hosting_prop_map(
+        start, end
     )
 
-    return seqr_map, hail_map
+    seqr_hosting_map = get_seqr_hosting_prop_map_from(
+        relevant_analyses=joint_call_analyses,
+        sample_sizes_by_project=file_sizes_by_project,
+    )
+    shared_computation_map = get_shared_computation_prop_map(
+        file_sizes_by_project,
+        min_datetime=start,
+        max_datetime=end,
+    )
+
+    return seqr_hosting_map, shared_computation_map
 
 
-async def get_analysis_objects_and_crams_for_seqr_prop_map(
-    start: datetime, end: datetime, projects: list[str]
-):
+async def get_analysis_objects_for_seqr_hosting_prop_map(
+    start: datetime, end: datetime
+) -> list[dict]:
     """
     Fetch the relevant analysis objects + crams from sample-metadata
     to put together the proportionate_map.
@@ -446,7 +494,7 @@ async def get_analysis_objects_and_crams_for_seqr_prop_map(
     start_es_date = None
     if relevant_analysis:
         start_es_date = min(
-            datetime.fromtimestamp(a['timestamp_completed']) for a in relevant_analysis
+            datetime.fromisoformat(a['timestamp_completed']) for a in relevant_analysis
         )
 
     # if there are no ES-indices, or es-indices don't cover the range,
@@ -482,31 +530,24 @@ async def get_analysis_objects_and_crams_for_seqr_prop_map(
             relevant_analysis = relevant_analysis[idx:]
             break
 
-    all_samples = set(s for a in relevant_analysis for s in a['sample_ids'])
-
-    crams = await aapi.query_analyses_async(
-        AnalysisQueryModel(
-            sample_ids=list(all_samples),
-            type=AnalysisType('cram'),
-            projects=projects,
-            status=AnalysisStatus('completed'),
-        )
-    )
     logger.debug(
         f'Took {(datetime.now() - timeit_start).total_seconds()} to get analyses'
     )
 
-    return relevant_analysis, crams
+    return relevant_analysis
 
 
 def get_seqr_hosting_prop_map_from(
-    relevant_analyses: list[dict], crams: list[dict], project_id_map: dict[int, str]
+    relevant_analyses: list[dict],
+    sample_sizes_by_project: dict[str, list[dict]],
 ) -> ProportionateMapType:
-    """From prefetched analysis, compute the proprtionate_map"""
+    """
+    From prefetched analysis and lists of sample-sizes.
+    Samples can have a start / end, so how do we get the relevant value efficiently.
 
-    # Crams in SM only have one sample_id, so easy to link
-    # the cram back to the specific internal sample ID
-    cram_map = {c['sample_ids'][0]: c for c in crams}
+    One method, we can cycle thorugh sample_sizes_by_project, and calculate a delta,
+    so we can iterate from start of time, and then just add up all relevant values.
+    """
 
     timeit_start = datetime.now()
 
@@ -514,6 +555,52 @@ def get_seqr_hosting_prop_map_from(
     missing_sizes = {}
 
     proportioned_datasets: ProportionateMapType = []
+
+    if len(relevant_analyses) == 0:
+        raise ValueError('Not sure what to do here')
+
+    min_date = min(
+        map(
+            lambda el: datetime.fromisoformat(el['timestamp_completed']).date(),
+            relevant_analyses,
+        )
+    )
+    date_sizes_by_sample: dict[str, list[tuple[datetime.date, int]]] = defaultdict(list)
+    sample_to_project = {}
+    # let's loop through, and basically get the potential differential
+    # by day, this means we can just sum up all the values, rather than
+    # only selecting the _most relevant_ for some time - because that sounds
+    # like a potentially expensive op to do for each sample, but this is a fixed
+    # sum over the max range of the interval we're checking.
+    for project, samples in sample_sizes_by_project.items():
+        for sample_obj in samples:
+            sample_id = sample_obj['sample']
+            sample_to_project[sample_id] = project
+            sizes_dates: list[tuple[datetime.date, int]] = []
+            for obj in sample_obj['dates']:
+                size = sum(obj['size'].values())
+                start_date = utils.parse_date_only_string(obj['start'])
+                if len(sizes_dates) > 0:
+                    # subtract last size to get the difference
+                    # if the crams got smaller, this number will be negative
+                    size -= sizes_dates[-1][1]
+
+                adjusted_start_date = max(min_date, start_date)
+                sizes_dates.append((adjusted_start_date, size))
+
+            date_sizes_by_sample[sample_id] = sizes_dates
+
+    sizes_by_date_then_sample = defaultdict(lambda: defaultdict(int))
+    # now we can sum up all samples to get the total shift per sample
+    # for a given day.
+    for sample_id, date_size in date_sizes_by_sample.items():
+        for sdate, size in date_size:
+            # these are ordered
+            sizes_by_date_then_sample[sdate][sample_id] += size
+
+    ordered_sizes_by_day = list(
+        sorted(sizes_by_date_then_sample.items(), key=lambda el: el[0])
+    )
 
     for analysis in relevant_analyses:
 
@@ -524,19 +611,19 @@ def get_seqr_hosting_prop_map_from(
         # We might be able to roughly accept this by subtracting a day from the
         # joint-call, and sort of hope that no joint-call runs over 24 hours.
         dt = datetime.fromisoformat(analysis['timestamp_completed']) - timedelta(days=2)
-        samples = analysis['sample_ids']
+        analysis_day = max(dt.date(), min_date)
+        samples = set(analysis['sample_ids'])
+
+        # now we just need to sum up all sizes_by_date starting from the start to now
+        # only selecting the sampleIDs we want
 
         size_per_project = defaultdict(int)
-        for s in samples:
-            cram = cram_map.get(s)
-            if not cram:
-                missing_samples.add(s)
-                continue
-            cram_size = cram['meta'].get('size')
-            if not cram_size:
-                missing_sizes[s] = cram['output']
-            project_id = cram['project']
-            size_per_project[project_id] += cram_size
+        for sample_date, sample_map in ordered_sizes_by_day:
+            if sample_date > analysis_day:
+                break
+            relevant_samples_in_day = set(sample_map.keys()).intersection(samples)
+            for sample in relevant_samples_in_day:
+                size_per_project[sample_to_project[sample]] += sample_map[sample]
 
         # Size is in bytes, and plain Python int type is unbound
         total_size = sum(size_per_project.values())
@@ -544,8 +631,8 @@ def get_seqr_hosting_prop_map_from(
             (
                 dt,
                 {
-                    project_id_map[project_id]: size / total_size
-                    for project_id, size in size_per_project.items()
+                    project: (size / total_size, size)
+                    for project, size in size_per_project.items()
                 },
             )
         )
@@ -567,8 +654,7 @@ def get_seqr_hosting_prop_map_from(
 
 
 def get_shared_computation_prop_map(
-    crams: list[dict],
-    project_id_map: dict[str | int, str],
+    sample_sizes_by_project: dict[str, list[dict]],
     min_datetime: datetime,
     max_datetime: datetime,
 ) -> ProportionateMapType:
@@ -589,16 +675,22 @@ def get_shared_computation_prop_map(
 
     # 1.
     by_date_diff: dict[date, dict[str, int]] = defaultdict(lambda: defaultdict(int))
-    for cram in crams:
-        tc = utils.parse_hail_time(cram.get('time_completed'))
-        project_name = project_id_map[cram['project']]
-        if tc < min_datetime:
-            # avoid computation by capping dates to minimum
-            tc = min_datetime
-        elif tc > max_datetime:
-            # skip any crams AFTER the max date
-            continue
-        by_date_diff[tc.date()][project_name] += cram['meta'].get('size')
+    for project_name, samples in sample_sizes_by_project.items():
+        for sample_obj in samples:
+            sizes_dates: list[tuple[datetime.date, int]] = []
+            for obj in sample_obj['dates']:
+                size = sum(obj['size'].values())
+                start_date = utils.parse_date_only_string(obj['start'])
+                if start_date > max_datetime.date():
+                    continue
+                if len(sizes_dates) > 0:
+                    # subtract last size to get the difference
+                    # if the crams got smaller, this number will be negative
+                    size -= sizes_dates[-1][1]
+
+                adjusted_start_date = max(min_datetime.date(), start_date)
+                by_date_diff[adjusted_start_date][project_name] += size
+                sizes_dates.append((adjusted_start_date, size))
 
     # 2: progressively sum up the sizes, prepping for step 3
 
@@ -624,7 +716,8 @@ def get_shared_computation_prop_map(
     for dt, project_map in by_date_totals:
         total_size = sum(project_map.values())
         prop_project_map = {
-            project_id: size / total_size for project_id, size in project_map.items()
+            project_id: (size / total_size, size)
+            for project_id, size in project_map.items()
         }
         prop_map.append((datetime.combine(dt, datetime.min.time()), prop_project_map))
 
@@ -633,24 +726,32 @@ def get_shared_computation_prop_map(
 
 def get_ratios_from_date(
     dt: datetime, prop_map: ProportionateMapType
-) -> tuple[datetime, dict[str, float]]:
+) -> tuple[datetime, dict[str, tuple[float, int]]]:
     """
     From the prop_map, get the ratios for the applicable date.
 
     >>> get_ratios_from_date(
+    ...     datetime(2023, 1, 1),
+    ...     [(datetime(2020,12,31), {'d1': (1.0, 1)})]
+    ... )
+    (datetime.datetime(2020, 12, 31, 0, 0), {'d1': (1.0, 1)})
+
+    >>> get_ratios_from_date(
+    ...     datetime(2023, 1, 13),
+    ...     [(datetime(2022,12,31), {'d1': (1.0, 1)}),
+    ...      (datetime(2023,1,12), {'d1': (1.0, 2)})]
+    ... )
+    (datetime.datetime(2023, 1, 12, 0, 0), {'d1': (1.0, 2)})
+
+    >>> get_ratios_from_date(
+    ...     datetime(2023, 1, 3),
+    ...     [(datetime(2023,1,2), {'d1': (1.0, 1)})]
+    ... )
+    (datetime.datetime(2023, 1, 2, 0, 0), {'d1': (1.0, 1)})
+
+    >>> get_ratios_from_date(
     ...     datetime(2020, 1, 1),
-    ...     [(datetime(2019,12,31), {'d1': 1.0})]
-    ... )
-    (datetime.datetime(2019, 12, 31, 0, 0), {'d1': 1.0})
-
-    >>> get_ratios_from_date(
-    ...     datetime(2020, 1, 13),
-    ...     [(datetime(2019,12,31), {'d1': 1.0}), (datetime(2020,1,12), {'d1': 1.0})]
-    ... )
-    (datetime.datetime(2020, 1, 12, 0, 0), {'d1': 1.0})
-
-    >>> get_ratios_from_date(
-    ...     datetime(2020, 1, 1), [(datetime(2020,1,2), {'d1': 1.0})]
+    ...     [(datetime(2020,12,31), {'d1': (1.0, 1)})]
     ... )
     Traceback (most recent call last):
     ...
@@ -665,6 +766,8 @@ def get_ratios_from_date(
         if idt <= dt:
             return idt, m
 
+    logger.error(dt)
+    logger.error(prop_map)
     raise AssertionError(f'No ratio found for date {dt}')
 
 
@@ -696,15 +799,18 @@ async def main(start: datetime = None, end: datetime = None, dry_run=False):
 
     projects = get_seqr_datasets()
 
-    seqr_map, hail_map = await generate_proportionate_maps_of_datasets(
-        start, end, projects
-    )
+    (
+        seqr_hosting_prop_map,
+        shared_computation_prop_map,
+    ) = await generate_proportionate_maps_of_datasets(start, end, projects)
     result = 0
 
-    result += migrate_entries_from_bq(start, end, seqr_map, dry_run=dry_run)
+    result += migrate_entries_from_bq(
+        start, end, seqr_hosting_prop_map, dry_run=dry_run
+    )
 
     def func_get_finalised_entries(batch):
-        return get_finalised_entries_for_batch(batch, hail_map)
+        return get_finalised_entries_for_batch(batch, shared_computation_prop_map)
 
     result += await utils.process_entries_from_hail_in_chunks(
         start=start,
@@ -737,9 +843,10 @@ def from_pubsub(data=None, _=None):
 
 
 if __name__ == '__main__':
-    test_start, test_end = None, None
-    test_start, test_end = datetime(2022, 5, 1), datetime(2022, 6, 10)
+    logger.setLevel(logging.INFO)
+    logging.getLogger('google').setLevel(logging.WARNING)
+    logging.getLogger('asyncio').setLevel(logging.ERROR)
+    logging.getLogger('urllib3').setLevel(logging.WARNING)
 
-    asyncio.new_event_loop().run_until_complete(
-        main(start=test_start, end=test_end, dry_run=False)
-    )
+    test_start, test_end = datetime(2022, 8, 10), datetime(2022, 8, 15)
+    asyncio.new_event_loop().run_until_complete(main(start=test_start, end=test_end))
