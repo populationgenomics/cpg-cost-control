@@ -84,7 +84,7 @@ aapi = AnalysisApi()
 
 
 def get_finalised_entries_for_batch(
-    batch, proportion_map: ProportionateMapType  # pylint: disable=unused-argument
+    batch, proportion_map: ProportionateMapType
 ) -> list[dict[str, any]]:
     """
     Take a batch dictionary, and the full proportion map
