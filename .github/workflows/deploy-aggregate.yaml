@@ -72,7 +72,6 @@ jobs:
           refresh: true
           work-dir: aggregate
           stack-name: billing_aggregate
-          cloud-url: ${{ env.PULUMI_CLOUD_URL }}
 
       - name: Pulumi - Monthly Upload
         uses: pulumi/actions@v3
@@ -82,4 +81,3 @@ jobs:
           refresh: true
           work-dir: aggregate
           stack-name: monthly_upload
-          cloud-url: ${{ env.PULUMI_CLOUD_URL }}
