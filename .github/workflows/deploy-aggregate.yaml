@@ -38,6 +38,7 @@ on:
 env:
   PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
   SLACK_AUTH_TOKEN: ${{ secrets.SLACK_AUTH_TOKEN }}
+  PULUMI_CLOUD_URL: gs://sabyan-pulumi
 
 jobs:
   deploy:
@@ -71,6 +72,7 @@ jobs:
           refresh: true
           work-dir: aggregate
           stack-name: billing_aggregate
+          cloud-url: ${{ env.PULUMI_CLOUD_URL }}
 
       - name: Pulumi - Monthly Upload
         uses: pulumi/actions@v3
@@ -80,3 +82,4 @@ jobs:
           refresh: true
           work-dir: aggregate
           stack-name: monthly_upload
+          cloud-url: ${{ env.PULUMI_CLOUD_URL }}
