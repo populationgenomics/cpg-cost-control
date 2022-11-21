@@ -38,7 +38,6 @@ on:
 env:
   PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
   SLACK_AUTH_TOKEN: ${{ secrets.SLACK_AUTH_TOKEN }}
-  PULUMI_CLOUD_URL: gs://sabyan-pulumi
 
 jobs:
   deploy:
