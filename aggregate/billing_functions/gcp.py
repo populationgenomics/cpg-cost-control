@@ -174,6 +174,7 @@ async def main(start: datetime = None, end: datetime = None) -> int:
 
 
 if __name__ == '__main__':
+
     # Set logging levels
     logger.setLevel(logging.INFO)
     logging.getLogger('google').setLevel(logging.WARNING)

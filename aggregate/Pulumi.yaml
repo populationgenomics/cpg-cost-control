@@ -1,6 +1,3 @@
 name: billing_aggregate
-runtime:
-  name: python
-  virtualenv: gcp-cost-control
-
 description: A Google Cloud Python Pulumi program to upload billing aggregation cloud functions
+runtime: python
