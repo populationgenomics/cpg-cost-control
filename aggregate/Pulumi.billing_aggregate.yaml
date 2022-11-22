@@ -7,7 +7,7 @@ config:
     - seqr
   opts:memory: 1024
   opts:timeout: 540
-  opts:cron: '0 0 8 * *'
+  opts:cron: '0 8 * * *'
   opts:slack_channel: '#software-alerts'
 
   gcp:project: billing-admin-290403
