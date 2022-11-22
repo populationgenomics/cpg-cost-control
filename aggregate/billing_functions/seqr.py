@@ -340,6 +340,12 @@ def migrate_entries_from_bq(
 
             del obj['billing_account_id']
             del obj['project']
+
+            if obj['tags']:
+                tags = obj['tags']
+                logger.warn(f'Deleting tags {tags}')
+
+            del obj['tags']
             labels = obj['labels']
 
             usage_start_time = datetime.fromtimestamp(
