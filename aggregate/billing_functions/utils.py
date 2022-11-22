@@ -630,7 +630,7 @@ def upsert_rows_into_bigquery(
         j = '\n'.join(json.dumps(o) for o in filtered_obj)
 
         resp = get_bigquery_client().load_table_from_file(
-            StringIO(j), table, job_config=job_config
+            StringIO(j), table, job_config=job_config, project=GCP_PROJECT
         )
         try:
             result = resp.result()

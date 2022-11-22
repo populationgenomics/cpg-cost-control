@@ -37,9 +37,6 @@ import logging
 from collections import defaultdict
 from datetime import datetime, timedelta, date
 
-import yaml
-import requests
-
 import google.cloud.bigquery as bq
 
 from sample_metadata.apis import SampleApi, ProjectApi, AnalysisApi
@@ -779,15 +776,9 @@ def get_seqr_datasets() -> list[str]:
     Get Hail billing projects, same names as dataset
     """
 
-    response = requests.get(
-        'https://raw.githubusercontent.com/populationgenomics/'
-        'analysis-runner/main/stack/Pulumi.seqr.yaml'
-    )
-    response.raise_for_status()
-
-    d = yaml.safe_load(response.text)
-    datasets = json.loads(d['config']['datasets:depends_on'])
-    return datasets
+    projects = papi.get_seqr_projects()
+    projects = [x['name'] for x in projects]
+    return projects
 
 
 # DRIVER functions
@@ -845,8 +836,9 @@ def from_pubsub(data=None, _=None):
 if __name__ == '__main__':
     logger.setLevel(logging.INFO)
     logging.getLogger('google').setLevel(logging.WARNING)
+    logging.getLogger('google.auth.compute_engine._metadata').setLevel(logging.ERROR)
     logging.getLogger('asyncio').setLevel(logging.ERROR)
     logging.getLogger('urllib3').setLevel(logging.WARNING)
 
-    test_start, test_end = datetime(2022, 8, 10), datetime(2022, 8, 15)
+    test_start, test_end = datetime(2022, 9, 1), datetime(2022, 11, 21)
     asyncio.new_event_loop().run_until_complete(main(start=test_start, end=test_end))
