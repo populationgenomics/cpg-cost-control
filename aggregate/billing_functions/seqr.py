@@ -818,9 +818,9 @@ async def main(start: datetime = None, end: datetime = None, dry_run=False):
     )
 
     if dry_run:
-        print(f'Finished dry run, would have inserted {result} entries')
+        logger.info(f'Finished dry run, would have inserted {result} entries')
     else:
-        print(f'Inserted {result} entries')
+        logger.info(f'Inserted {result} entries')
 
 
 def from_request(request):
@@ -846,5 +846,5 @@ if __name__ == '__main__':
     logging.getLogger('asyncio').setLevel(logging.ERROR)
     logging.getLogger('urllib3').setLevel(logging.WARNING)
 
-    test_start, test_end = datetime(2022, 9, 1), datetime(2022, 11, 21)
+    test_start, test_end = datetime(2022, 11, 1), datetime(2022, 11, 23)
     asyncio.new_event_loop().run_until_complete(main(start=test_start, end=test_end))

@@ -82,7 +82,7 @@ async def migrate_billing_data(start, end, dataset_to_topic) -> int:
         return 0
 
     # Add id and topic to the row
-    migrate_rows = migrate_rows.drop(columns=['billing_account_id'])
+    migrate_rows = migrate_rows.drop(columns=['billing_account_id', 'tags'])
     migrate_rows.insert(0, 'topic', migrate_rows.apply(get_topic, axis=1))
     migrate_rows.insert(0, 'id', migrate_rows.apply(billing_row_to_key, axis=1))
 
@@ -180,5 +180,5 @@ if __name__ == '__main__':
     logging.getLogger('asyncio').setLevel(logging.ERROR)
     logging.getLogger('urllib3').setLevel(logging.WARNING)
 
-    test_start, test_end = datetime(2022, 9, 1), datetime(2022, 11, 21)
+    test_start, test_end = datetime(2022, 8, 1), datetime(2022, 12, 1)
     asyncio.new_event_loop().run_until_complete(main(start=test_start, end=test_end))

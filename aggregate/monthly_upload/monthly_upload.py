@@ -5,6 +5,7 @@ import json
 import asyncio
 import logging
 
+from itertools import product
 from datetime import datetime
 
 import google.cloud.bigquery as bq
@@ -21,6 +22,8 @@ GCP_MONTHLY_BILLING_BQ_TABLE = f'{GCP_PROJECT}.billing_aggregate.aggregate_month
 
 _SECRET_MANAGER: secretmanager.SecretManagerServiceClient = None
 _BQ_CLIENT: bq.Client = None
+
+logger = logger = logging.getLogger('monthly-upload')
 
 
 def get_bigquery_client():
@@ -188,6 +191,16 @@ def convert_date(date: datetime, frmt: str, frmt_to: str):
 
 
 if __name__ == '__main__':
-    YEAR = '2022'
-    MONTH = '05'
-    main({'attributes': {'year': YEAR, 'month': MONTH}}, None)
+    # Set logging levels
+    logger.setLevel(logging.INFO)
+    logging.getLogger('google').setLevel(logging.WARNING)
+    logging.getLogger('asyncio').setLevel(logging.ERROR)
+    logging.getLogger('urllib3').setLevel(logging.WARNING)
+
+    YEARS = [2022]
+    MONTHS = list(range(1, 12))
+
+    event_loop = asyncio.new_event_loop()
+
+    for m, y in product(MONTHS, YEARS):
+        main({'attributes': {'year': f'{y}', 'month': f'{m:02}'}}, None)

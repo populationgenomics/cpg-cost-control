@@ -689,7 +689,6 @@ def upsert_aggregated_dataframe_into_bigquery(
     )
 
     logger.info(f'{adding_rows} new rows inserted')
-    return adding_rows
 
 
 CACHED_CURRENCY_CONVERSION: dict[str, float] = {}
