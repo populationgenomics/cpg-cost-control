@@ -16,8 +16,8 @@ through a service account key.
 ## Set up the Cloud Function
 
 1. Select the GCP billing project.
-1. Add a service account for _running_ the Cloud Function.
-1. In the Secret Manager, create a secret `billing-airtable-monthly-upload-apikeys`,
+2. Add a service account for _running_ the Cloud Function.
+3. In the Secret Manager, create a secret `billing-airtable-monthly-upload-apikeys`,
    with a JSON config as follows, where `apiKey` corresponds to the Airtable account
    that should be used for the updates. The corresponding tables must have
    format matching [2022 Example](https://airtable.com/app62isJvsSz0ziWT/tblqQkcgXt6fdsgj5/viwtxRpnYQNwXPVUw?blocks=hide)
@@ -37,7 +37,7 @@ through a service account key.
    }
    ```
 
-1. Grant the Cloud Function service account the
+4. Grant the Cloud Function service account the
    _Secret Manager Secret Accessor_ role for the secret.
 
 ## Invoking the Cloud Function
