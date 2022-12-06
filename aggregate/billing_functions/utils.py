@@ -12,7 +12,6 @@ import logging
 
 from pathlib import Path
 from io import StringIO
-from collections import defaultdict
 from datetime import date, datetime, timedelta
 from typing import Any, Iterator, Sequence, TypeVar, Iterable
 
@@ -61,7 +60,7 @@ HAIL_SERVICE_FEE = 0.0
 # BQ only allows 10,000 parameters in a query, so given the way we upsert rows,
 # only upsert DEFAULT_BQ_INSERT_CHUNK_SIZE at once:
 # https://cloud.google.com/bigquery/quotas#:~:text=up%20to%2010%2C000%20parameters.
-DEFAULT_BQ_INSERT_CHUNK_SIZE = 9000
+DEFAULT_BQ_INSERT_CHUNK_SIZE = 20000
 ANALYSIS_RUNNER_PROJECT_ID = 'analysis-runner'
 DEFAULT_RANGE_INTERVAL = timedelta(days=2)
 
@@ -267,10 +266,10 @@ def get_credits(
     """
     Get a hail / seqr credit for each entry.
 
-    Dependent on where the cost should be attributed, we apply a "credit"
+    Dependent on where the cost should be attributed, we apply a 'credit'
     to that topic in order to balanace where money is spent. For example,
     say $DATASET runs a job using Hail. We determine the cost of that job,
-    apply a "debit" to $DATASET, and an equivalent "credit" to Hail.
+    apply a 'debit' to $DATASET, and an equivalent 'credit' to Hail.
 
     The rough idea being the Hail topic should be roughly $0,
     minus adminstrative overhead.
@@ -481,7 +480,7 @@ async def process_entries_from_hail_in_chunks(
             if len(jobs) > 10000 and len(entries) > 1000:
                 logger.info(
                     f'Expecting large number of jobs ({len(jobs)}) from '
-                    f'batch {batch["id"]}, inserting contents early'
+                    f"batch {batch['id']}, inserting contents early"
                 )
                 result += upsert_rows_into_bigquery(
                     table=GCP_AGGREGATE_DEST_TABLE, objs=entries, dry_run=dry_run
@@ -569,6 +568,7 @@ def upsert_rows_into_bigquery(
         logger.info(f'Will insert {len(objs)} rows in {n_chunks} chunks')
 
     inserts = 0
+    inserted_ids = set()
 
     for chunk_idx, chunked_objs in enumerate(chunk(objs, chunk_size)):
 
@@ -577,15 +577,10 @@ def upsert_rows_into_bigquery(
             WHERE id IN UNNEST(@ids);
         """
 
-        ids = set(o['id'] for o in chunked_objs)
-        if len(ids) != len(chunked_objs):
-            counter = defaultdict(int)
-            for o in chunked_objs:
-                counter[o['id']] += 1
-            duplicates = [f'{k} ({v})' for k, v in counter.items() if v > 1]
-            raise ValueError(
-                'There are multiple rows with the same id: ' + ', '.join(duplicates)
-            )
+        # NOTE: it's possible to have valid duplicate rows
+        # allow for adding duplicates on first upload only
+        # Protects us against duplicate ids falling across chunks
+        ids = set(o['id'] for o in chunked_objs) - inserted_ids
 
         job_config = bq.QueryJobConfig(
             query_parameters=[
@@ -643,6 +638,7 @@ def upsert_rows_into_bigquery(
             raise e
 
         inserts += nrows
+        inserted_ids = inserted_ids.union(ids)
 
     return inserts
 

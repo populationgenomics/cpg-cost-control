@@ -40,11 +40,11 @@ import pulumi_gcp as gcp
 
 # import debugpy
 
-# debugpy.listen(("0.0.0.0", 5678))
-# print("debugpy is listening, attach by pressing F5 or ►")
+# debugpy.listen(('0.0.0.0', 5678))
+# print('debugpy is listening, attach by pressing F5 or ►')
 
 # debugpy.wait_for_client()
-# print("Attached to debugpy!")
+# print('Attached to debugpy!')
 
 
 # File path to where the Cloud Function's source code is located.
@@ -76,7 +76,7 @@ def main():
 
     # Set environment variable to the correct project
     name = config_values['NAME']
-    bucket_name = f'{name}-{config_values["PROJECT"]}'
+    bucket_name = f"{name}-{config_values['PROJECT']}"
 
     # Start by enabling all cloud function services
     cloud_service = gcp.projects.Service(
@@ -219,8 +219,8 @@ def create_cloud_function(
     # Slack notifications
     filter_string = fxn.name.apply(
         lambda fxn_name: f"""
-            resource.type="cloud_function"
-            AND resource.labels.function_name="{fxn_name}"
+            resource.type='cloud_function'
+            AND resource.labels.function_name='{fxn_name}'
             AND severity >= WARNING
         """
     )

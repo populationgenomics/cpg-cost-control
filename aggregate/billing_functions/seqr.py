@@ -63,7 +63,6 @@ SEQR_FIRST_LOAD = datetime(2021, 9, 1)
 GCP_BILLING_BQ_TABLE = (
     'billing-admin-290403.billing.gcp_billing_export_v1_01D012_20A6A2_CBD343'
 )
-DESTINATION_TABLE = 'sabrina-dev-337923.billing.aggregate'
 
 BASE = 'https://batch.hail.populationgenomics.org.au'
 BATCHES_API = BASE + '/api/v1alpha/batches'
@@ -306,11 +305,14 @@ def migrate_entries_from_bq(
             f'Migrating seqr BQ data [{istart.isoformat()}, {iend.isoformat()}]'
         )
         # pylint: disable=too-many-branches
+
+        # TODO: remove Nov invoice month filter
         _query = f"""
             SELECT * FROM `{GCP_BILLING_BQ_TABLE}`
             WHERE export_time >= @start
                 AND export_time <= @end
                 AND project.id = @project
+                AND invoice.month = '202211'
             ORDER BY usage_start_time
         """
 
@@ -329,14 +331,19 @@ def migrate_entries_from_bq(
             .to_dataframe()
         )
         json_obj = json.loads(df.to_json(orient='records'))
+        # with open('seqr-data-load-20221103-20221104.json', 'r') as f:
+        #     # f.write(df.to_json(orient='records'))
+        #     json_obj = json.load(f)
 
-        entries_by_id = {}
+        entries = []
         param_map, current_date = None, None
-        for obj in json_obj:
+        for _, obj in enumerate(json_obj):
 
-            if obj['cost'] == 0:
-                # come on now
-                continue
+            # if len(entries) != idx * 5:
+            #     print('AHHHHH BAD')
+
+            # if obj['cost'] == 0:
+            #     continue
 
             del obj['billing_account_id']
             del obj['project']
@@ -361,12 +368,27 @@ def migrate_entries_from_bq(
                     dt=usage_start_time, prop_map=prop_map
                 )
 
+            # Data transforms and key changes
+            obj['topic'] = 'seqr'
+            obj['service']['id'] = SERVICE_ID
+            obj['labels'] = labels
+            dates = ['usage_start_time', 'usage_end_time', 'export_time']
+            for k in dates:
+                obj[k] = utils.to_bq_time(datetime.fromtimestamp(int(obj[k] / 1000)))
+            nid = '-'.join([SERVICE_ID, 'seqr', billing_obj_to_key(obj)])
+            obj['id'] = nid
+
+            entries.append(obj)
+
+            obj_entries = []
             for dataset, (ratio, dataset_size) in param_map.items():
+
+                if sum(x[0] for x in param_map.values()) != 1.0:
+                    logger.error(f"Prop map doesn't sum to one: {param_map}")
 
                 new_entry = {**obj}
 
                 new_entry['topic'] = dataset
-                new_entry['service']['id'] = SERVICE_ID
                 new_entry['labels'] = [
                     *labels,
                     {'key': 'proportion', 'value': ratio},
@@ -374,30 +396,21 @@ def migrate_entries_from_bq(
                 ]
                 new_entry['cost'] *= ratio
 
-                dates = ['usage_start_time', 'usage_end_time', 'export_time']
-                for k in dates:
-                    new_entry[k] = utils.to_bq_time(
-                        datetime.fromtimestamp(int(obj[k] / 1000))
-                    )
-
                 nid = '-'.join([SERVICE_ID, dataset, billing_obj_to_key(new_entry)])
-
                 new_entry['id'] = nid
-                if nid in entries_by_id:
-                    if new_entry != entries_by_id[nid]:
 
-                        logger.warning(
-                            f'WARNING: duplicate entry {nid} with diff values'
-                        )
-                    continue
+                entries.append(new_entry)
+                obj_entries.append(new_entry)
 
-                entries_by_id[nid] = new_entry
+            total_cost = round(sum(x['cost'] for x in obj_entries), 6)
+            if total_cost != round(obj['cost'], 6):
+                cost = obj['cost']
+                logger.error(f'Cost does not sum correctly. {obj_entries}\n{cost}')
 
         # insert all entries here
-        entries = list(entries_by_id.values())
         entries.extend(
             utils.get_credits(
-                entries=entries_by_id.values(),
+                entries=entries,
                 topic='seqr',
                 project=utils.SEQR_PROJECT_FIELD,
             )
@@ -440,7 +453,7 @@ async def generate_proportionate_maps_of_datasets(
     missing_projects = set(projects) - set(sm_pid_to_dataset.values())
     if missing_projects:
         raise ValueError(
-            f'The datasets {", ".join(missing_projects)} were not found in SM'
+            f"The datasets {', '.join(missing_projects)} were not found in SM"
         )
 
     logger.info(f'Getting proportionate map for projects: {filtered_projects}')
@@ -450,7 +463,7 @@ async def generate_proportionate_maps_of_datasets(
     sample_file_sizes_by_project = await aapi.get_sample_file_sizes_async(
         project_names=projects, start_date=str(start.date()), end_date=str(end.date())
     )
-    # this looks like {'dataset': [{"sample_id": "CPG123", "dates": [...]}, ...]}
+    # this looks like {'dataset': [{'sample_id': 'CPG123', 'dates': [...]}, ...]}
     file_sizes_by_project: dict[str, list[dict]] = {
         p['project']: p['samples'] for p in sample_file_sizes_by_project
     }
@@ -798,7 +811,7 @@ async def main(start: datetime = None, end: datetime = None, dry_run=False):
 
     (
         seqr_hosting_prop_map,
-        shared_computation_prop_map,
+        _,  # shared_computation_prop_map,
     ) = await generate_proportionate_maps_of_datasets(start, end, projects)
     result = 0
 
@@ -806,16 +819,16 @@ async def main(start: datetime = None, end: datetime = None, dry_run=False):
         start, end, seqr_hosting_prop_map, dry_run=dry_run
     )
 
-    def func_get_finalised_entries(batch):
-        return get_finalised_entries_for_batch(batch, shared_computation_prop_map)
+    # def func_get_finalised_entries(batch):
+    #     return get_finalised_entries_for_batch(batch, shared_computation_prop_map)
 
-    result += await utils.process_entries_from_hail_in_chunks(
-        start=start,
-        end=end,
-        billing_project=SEQR_HAIL_BILLING_PROJECT,
-        func_get_finalised_entries_for_batch=func_get_finalised_entries,
-        dry_run=dry_run,
-    )
+    # result += await utils.process_entries_from_hail_in_chunks(
+    #     start=start,
+    #     end=end,
+    #     billing_project=SEQR_HAIL_BILLING_PROJECT,
+    #     func_get_finalised_entries_for_batch=func_get_finalised_entries,
+    #     dry_run=dry_run,
+    # )
 
     if dry_run:
         logger.info(f'Finished dry run, would have inserted {result} entries')
@@ -846,5 +859,5 @@ if __name__ == '__main__':
     logging.getLogger('asyncio').setLevel(logging.ERROR)
     logging.getLogger('urllib3').setLevel(logging.WARNING)
 
-    test_start, test_end = datetime(2022, 11, 1), datetime(2022, 11, 23)
+    test_start, test_end = datetime(2022, 11, 1), datetime(2022, 12, 1)
     asyncio.new_event_loop().run_until_complete(main(start=test_start, end=test_end))

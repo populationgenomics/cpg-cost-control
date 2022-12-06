@@ -90,7 +90,7 @@ class TestUtilsFunctions(unittest.TestCase):
     def test_get_start_and_end_from_data(self):
         """Test the parsing of incoming data json"""
 
-        json_str = '{"start": "2022-01-01", "end": "2022-01-02"}'
+        json_str = "{'start': '2022-01-01', 'end': '2022-01-02'}"
         json_strt, json_end = datetime.fromisoformat(
             '2022-01-01'
         ), datetime.fromisoformat('2022-01-02')

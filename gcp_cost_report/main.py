@@ -40,8 +40,8 @@ FROM
           `{BIGQUERY_BILLING_TABLE}`
         WHERE
           _PARTITIONTIME >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 32 DAY)
-          AND invoice.month = FORMAT_TIMESTAMP("%Y%m", CURRENT_TIMESTAMP(),
-                                               "{QUERY_TIME_ZONE}")
+          AND invoice.month = FORMAT_TIMESTAMP('%Y%m', CURRENT_TIMESTAMP(),
+                                               '{QUERY_TIME_ZONE}')
         GROUP BY
           project.id,
           currency
@@ -59,8 +59,8 @@ FROM
     WHERE
       _PARTITIONTIME >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 2 DAY)
       AND export_time > TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 1 DAY)
-      AND invoice.month = FORMAT_TIMESTAMP("%Y%m", CURRENT_TIMESTAMP(),
-                                           "{QUERY_TIME_ZONE}")
+      AND invoice.month = FORMAT_TIMESTAMP('%Y%m', CURRENT_TIMESTAMP(),
+                                           '{QUERY_TIME_ZONE}')
     GROUP BY
       project.id,
       currency
@@ -130,7 +130,7 @@ def gcp_cost_report(unused_data, unused_context):
         totals[row['currency']]['month'] += row['month']
 
         if row['day']:
-            last_day_str = f'{row["day"]:.2f}'
+            last_day_str = f"{row['day']:.2f}"
             totals[currency]['day'] += row['day']
 
         row_str = add_currency_to_non_null_fields(
@@ -168,8 +168,8 @@ def gcp_cost_report(unused_data, unused_context):
         return
 
     for currency, vals in totals.items():
-        last_day_str = f'{vals["day"]:.2f}'
-        last_month_str = f'{vals["month"]:.2f}'
+        last_day_str = f"{vals['day']:.2f}"
+        last_month_str = f"{vals['month']:.2f}"
 
         # totals don't have percent used
         totals_summary.append(
