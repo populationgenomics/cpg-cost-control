@@ -10,8 +10,9 @@ import json
 import asyncio
 import logging
 
-from pathlib import Path
+
 from io import StringIO
+from pathlib import Path
 from datetime import date, datetime, timedelta
 from typing import Any, Iterator, Sequence, TypeVar, Iterable
 
@@ -651,6 +652,10 @@ def upsert_aggregated_dataframe_into_bigquery(
     It must respect the schema defined in get_bq_schema_json().
     """
 
+    if len(df['id']) == 0:
+        logger.info(f'No rows to insert')
+        return 0
+
     # Cannot use query parameters for table names
     # https://cloud.google.com/bigquery/docs/parameterized-queries
     _query = f"""
@@ -663,7 +668,8 @@ def upsert_aggregated_dataframe_into_bigquery(
         ]
     )
 
-    result = get_bigquery_client().query(_query, job_config=job_config).result()
+    client = get_bigquery_client()
+    result = client.query(_query, job_config=job_config).result()
     existing_ids = set(result.to_dataframe()['id'])
 
     # Filter out any rows that are already in the table
@@ -685,6 +691,7 @@ def upsert_aggregated_dataframe_into_bigquery(
     )
 
     logger.info(f'{adding_rows} new rows inserted')
+    return adding_rows
 
 
 CACHED_CURRENCY_CONVERSION: dict[str, float] = {}

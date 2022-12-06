@@ -12,6 +12,15 @@ Tasks:
     - just grab only settled data within START + END of previous time period
 - Service ID should be faithfully handed over
 - Should search and update for [START_PERIOD, END_PERIOD)
+
+IMPORTANT:
+    When loading gcp data it's important to know that the id generated for each
+    data row...
+    DOES NOT uniquely define a single row in the aggregate bq table
+
+    Specifically, the same row validly can appear twice in the gcp billing
+    data and that is reflected correctly in the aggregate table.
+
 """
 
 import json
@@ -180,5 +189,5 @@ if __name__ == '__main__':
     logging.getLogger('asyncio').setLevel(logging.ERROR)
     logging.getLogger('urllib3').setLevel(logging.WARNING)
 
-    test_start, test_end = datetime(2022, 8, 1), datetime(2022, 12, 1)
+    test_start, test_end = datetime(2022, 11, 27), datetime(2022, 12, 1)
     asyncio.new_event_loop().run_until_complete(main(start=test_start, end=test_end))
