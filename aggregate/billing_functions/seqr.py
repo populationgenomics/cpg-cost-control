@@ -386,7 +386,7 @@ def migrate_entries_from_bq(
             obj['id'] = nid
 
             # For every seqr billing entry migrate it over
-            entries.append(obj)  # TODO uncomment
+            entries.append(obj)
             entries.extend(
                 utils.get_credits(
                     entries=[obj],
@@ -832,20 +832,20 @@ def get_ratios_from_date(
     ...     datetime(2023, 1, 1),
     ...     [(datetime(2020,12,31), {'d1': (1.0, 1)})]
     ... )
-    (datetime(2020, 12, 31, 0, 0), {'d1': (1.0, 1)})
+    (datetime.datetime(2020, 12, 31, 0, 0), {'d1': (1.0, 1)})
 
     >>> get_ratios_from_date(
     ...     datetime(2023, 1, 13),
     ...     [(datetime(2022,12,31), {'d1': (1.0, 1)}),
     ...      (datetime(2023,1,12), {'d1': (1.0, 2)})]
     ... )
-    (datetime(2023, 1, 12, 0, 0), {'d1': (1.0, 2)})
+    (datetime.datetime(2023, 1, 12, 0, 0), {'d1': (1.0, 2)})
 
     >>> get_ratios_from_date(
     ...     datetime(2023, 1, 3),
     ...     [(datetime(2023,1,2), {'d1': (1.0, 1)})]
     ... )
-    (datetime(2023, 1, 2, 0, 0), {'d1': (1.0, 1)})
+    (datetime.datetime(2023, 1, 2, 0, 0), {'d1': (1.0, 1)})
 
     >>> get_ratios_from_date(
     ...     datetime(2020, 1, 1),
