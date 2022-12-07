@@ -513,7 +513,7 @@ async def get_analysis_objects_for_seqr_hosting_prop_map(
 
     # unfortunately, the way ES-indices are progressive, basically
     # just have to request all es-indices
-    start = ES_ANALYSIS_OBJ_INTRO_DATE
+    start = min(start, ES_ANALYSIS_OBJ_INTRO_DATE)
 
     if end > ES_ANALYSIS_OBJ_INTRO_DATE:
         es_indices = await aapi.query_analyses_async(
