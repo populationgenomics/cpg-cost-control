@@ -61,11 +61,11 @@ HAIL_SERVICE_FEE = 0.0
 # BQ only allows 10,000 parameters in a query, so given the way we upsert rows,
 # only upsert DEFAULT_BQ_INSERT_CHUNK_SIZE at once:
 # https://cloud.google.com/bigquery/quotas#:~:text=up%20to%2010%2C000%20parameters.
-DEFAULT_BQ_INSERT_CHUNK_SIZE = 40000
+DEFAULT_BQ_INSERT_CHUNK_SIZE = 9000
 ANALYSIS_RUNNER_PROJECT_ID = 'analysis-runner'
 
 # TODO: change back to 2
-DEFAULT_RANGE_INTERVAL = timedelta(days=1)
+DEFAULT_RANGE_INTERVAL = timedelta(days=2)
 
 
 HAIL_BASE = 'https://batch.hail.populationgenomics.org.au'

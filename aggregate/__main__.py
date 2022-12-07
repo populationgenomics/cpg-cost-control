@@ -219,8 +219,8 @@ def create_cloud_function(
     # Slack notifications
     filter_string = fxn.name.apply(
         lambda fxn_name: f"""
-            resource.type='cloud_function'
-            AND resource.labels.function_name='{fxn_name}'
+            resource.type="cloud_function"
+            AND resource.labels.function_name="{fxn_name}"
             AND severity >= WARNING
         """
     )

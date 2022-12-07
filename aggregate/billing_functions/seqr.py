@@ -331,9 +331,6 @@ def migrate_entries_from_bq(
             .to_dataframe()
         )
         json_obj = json.loads(df.to_json(orient='records'))
-        # with open('seqr-data-load-20221103-20221104.json', 'r') as f:
-        #     # f.write(df.to_json(orient='records'))
-        #     json_obj = json.load(f)
 
         entries = []
         param_map, current_date = None, None
@@ -404,11 +401,6 @@ def migrate_entries_from_bq(
 
                 entries.append(new_entry)
                 obj_entries.append(new_entry)
-
-            total_cost = round(sum(x['cost'] for x in obj_entries), SEQR_ROUND)
-            if total_cost != round(obj['cost'], SEQR_ROUND):
-                cost = obj['cost']
-                logger.error(f'Cost does not sum correctly. {obj_entries}\n{cost}')
 
         result += utils.upsert_rows_into_bigquery(
             table=utils.GCP_AGGREGATE_DEST_TABLE,
