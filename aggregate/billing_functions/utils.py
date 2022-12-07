@@ -67,6 +67,7 @@ ANALYSIS_RUNNER_PROJECT_ID = 'analysis-runner'
 # TODO: change back to 2
 DEFAULT_RANGE_INTERVAL = timedelta(days=2)
 
+SEQR_PROJECT_ID = 'seqr-308602'
 
 HAIL_BASE = 'https://batch.hail.populationgenomics.org.au'
 HAIL_UI_URL = HAIL_BASE + '/batches/{batch_id}'

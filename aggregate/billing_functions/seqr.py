@@ -323,7 +323,7 @@ def migrate_entries_from_bq(
             query_parameters=[
                 bq.ScalarQueryParameter('start', 'STRING', str(istart)),
                 bq.ScalarQueryParameter('end', 'STRING', str(iend)),
-                bq.ScalarQueryParameter('project', 'STRING', 'seqr-308602'),
+                bq.ScalarQueryParameter('project', 'STRING', utils.SEQR_PROJECT_ID),
             ]
         )
 
