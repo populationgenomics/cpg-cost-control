@@ -425,11 +425,16 @@ def migrate_entries_from_bq(
         elif mode == 'local':
 
             with open(
-                os.path.join(output_path, 'load', f'seqr-hosting-{istart}-{iend}.json'),
+                os.path.join(
+                    output_path,
+                    'load',
+                    f'seqr-hosting-{istart.isoformat()}-{iend.isoformat()}.json',
+                ),
                 'w+',
                 encoding='utf-8',
             ) as f:
-                rapidjson.dump(entries, f)
+                # needs to be JSONL (line delimited JSON)
+                f.writelines(rapidjson.dumps(e) + '\n' for e in entries)
             result += len(entries)
 
     return result
@@ -950,7 +955,7 @@ if __name__ == '__main__':
     logging.getLogger('asyncio').setLevel(logging.ERROR)
     logging.getLogger('urllib3').setLevel(logging.WARNING)
 
-    test_start, test_end = datetime(2022, 6, 1), datetime(2022, 12, 5)
+    test_start, test_end = datetime(2022, 10, 1), datetime(2022, 10, 3)
     asyncio.new_event_loop().run_until_complete(
         main(start=test_start, end=test_end, mode='local', output_path=os.getcwd())
     )
