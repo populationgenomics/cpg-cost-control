@@ -310,7 +310,6 @@ def migrate_entries_from_bq(
         )
         # pylint: disable=too-many-branches
 
-        # TODO: remove Nov invoice month filter
         _query = f"""
             SELECT * FROM `{GCP_BILLING_BQ_TABLE}`
             WHERE export_time >= @start
@@ -327,9 +326,9 @@ def migrate_entries_from_bq(
             ]
         )
 
-        temp_file = f'seqr-query-{istart}-{iend}.json'
+        temp_file = f'seqr-query-{istart.isoformat()}-{iend.isoformat}.json'
 
-        if os.path.exists(temp_file):
+        if mode == 'local' and os.path.exists(temp_file):
             logger.info(f'Loading BQ data from {temp_file}')
             with open(temp_file, encoding='utf-8') as f:
                 json_obj = rapidjson.load(f)
@@ -343,17 +342,15 @@ def migrate_entries_from_bq(
                 .to_dataframe()
             )
             json_str = df.to_json(orient='records')
-            with open(temp_file, 'w+', encoding='utf-8') as f:
-                f.write(json_str)
+            if mode == 'local':
+                with open(temp_file, 'w+', encoding='utf-8') as f:
+                    f.write(json_str)
             json_obj = rapidjson.loads(json_str)
+            logger.info(f'Received {len(json_obj)} rows')
 
         entries = []
         param_map, current_date = None, None
         for _, obj in enumerate(json_obj):
-
-            if obj.get('cost_type') == 'tax':
-                # temporarily skip
-                continue
 
             del obj['billing_account_id']
             del obj['project']
@@ -419,8 +416,7 @@ def migrate_entries_from_bq(
             result += len(entries)
         elif mode == 'prod':
             result += utils.upsert_rows_into_bigquery(
-                table=utils.GCP_AGGREGATE_DEST_TABLE,
-                objs=entries,
+                table=utils.GCP_AGGREGATE_DEST_TABLE, objs=entries, dry_run=False
             )
         elif mode == 'local':
 
