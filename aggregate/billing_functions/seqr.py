@@ -1,4 +1,4 @@
-# pylint: disable=logging-format-interpolation,too-many-locals,too-many-branches
+# pylint: disable=logging-format-interpolation,too-many-locals,too-many-branches,too-many-lines,c-extension-no-member   # noqa: E501
 """
 This cloud function runs DAILY, and distributes the cost of
 SEQR on the sample size within SEQR.
@@ -30,7 +30,6 @@ TO DO :
 from typing import Literal
 
 import os
-import json
 import asyncio
 import hashlib
 import logging
@@ -38,7 +37,7 @@ import logging
 from collections import defaultdict
 from datetime import datetime, timedelta, date
 
-import pandas as pd
+import rapidjson
 import google.cloud.bigquery as bq
 
 from sample_metadata.apis import SampleApi, ProjectApi, AnalysisApi
@@ -328,17 +327,33 @@ def migrate_entries_from_bq(
             ]
         )
 
-        df = (
-            utils.get_bigquery_client()
-            .query(_query, job_config=job_config)
-            .result()
-            .to_dataframe()
-        )
-        json_obj = json.loads(df.to_json(orient='records'))
+        temp_file = f'seqr-query-{istart}-{iend}.json'
+
+        if os.path.exists(temp_file):
+            logger.info(f'Loading BQ data from {temp_file}')
+            with open(temp_file, encoding='utf-8') as f:
+                json_obj = rapidjson.load(f)
+        else:
+            logger.info(f'Loading BQ data from {temp_file}')
+
+            df = (
+                utils.get_bigquery_client()
+                .query(_query, job_config=job_config)
+                .result()
+                .to_dataframe()
+            )
+            json_str = df.to_json(orient='records')
+            with open(temp_file, 'w+', encoding='utf-8') as f:
+                f.write(json_str)
+            json_obj = rapidjson.loads(json_str)
 
         entries = []
         param_map, current_date = None, None
         for _, obj in enumerate(json_obj):
+
+            if obj.get('cost_type') == 'tax':
+                # temporarily skip
+                continue
 
             del obj['billing_account_id']
             del obj['project']
@@ -383,14 +398,9 @@ def migrate_entries_from_bq(
                 )
             )
 
-            obj_entries = []
             for dataset, (ratio, dataset_size) in param_map.items():
 
-                prop_map_sum = round(sum(x[0] for x in param_map.values()), SEQR_ROUND)
-                if prop_map_sum != 1.0:
-                    logger.error(f"Prop map doesn't sum to one: {param_map}")
-
-                new_entry = {**obj}
+                new_entry = obj.copy()
 
                 new_entry['topic'] = dataset
                 new_entry['labels'] = [
@@ -404,7 +414,6 @@ def migrate_entries_from_bq(
                 new_entry['id'] = nid
 
                 entries.append(new_entry)
-                obj_entries.append(new_entry)
 
         if mode == 'dry-run':
             result += len(entries)
@@ -414,10 +423,13 @@ def migrate_entries_from_bq(
                 objs=entries,
             )
         elif mode == 'local':
-            df = pd.DataFrame.from_dict(entries)
-            df.to_parquet(
-                os.path.join(output_path, f'seqr-hosting-{istart}-{iend}.parquet')
-            )
+
+            with open(
+                os.path.join(output_path, 'load', f'seqr-hosting-{istart}-{iend}.json'),
+                'w+',
+                encoding='utf-8',
+            ) as f:
+                rapidjson.dump(entries, f)
             result += len(entries)
 
     return result
@@ -426,9 +438,7 @@ def migrate_entries_from_bq(
 def billing_obj_to_key(obj: dict[str, any]) -> str:
     """Convert a billing row to a hash which will be the row key"""
     identifier = hashlib.md5()
-    for k, v in obj.items():
-        identifier.update((k + str(v)).encode('utf-8'))
-
+    identifier.update(rapidjson.dumps(obj, sort_keys=True).encode())
     return identifier.hexdigest()
 
 
@@ -500,6 +510,10 @@ async def get_analysis_objects_for_seqr_hosting_prop_map(
     # from 2022-06-01, we use it based on es-index, otherwise joint-calling
     timeit_start = datetime.now()
     relevant_analysis = []
+
+    # unfortunately, the way ES-indices are progressive, basically
+    # just have to request all es-indices
+    start = ES_ANALYSIS_OBJ_INTRO_DATE
 
     if end > ES_ANALYSIS_OBJ_INTRO_DATE:
         es_indices = await aapi.query_analyses_async(
@@ -641,7 +655,7 @@ def get_seqr_hosting_prop_map_from(
         total_size = sum(size_per_project.values())
         proportioned_datasets.append(
             (
-                analysis_day,
+                datetime(analysis_day.year, analysis_day.month, analysis_day.day),
                 {
                     project: (size / total_size, size)
                     for project, size in size_per_project.items()
@@ -706,8 +720,9 @@ def get_relevant_samples_for_day_from_jc_es(
     for analysis_day, aday_samples in sorted(
         day_project_delta_sample_map.items(), key=lambda r: r[0]
     ):
-        if len(analysis_day_samples) > 0:
+        if len(analysis_day_samples) == 0:
             analysis_day_samples.append((analysis_day, aday_samples))
+            continue
 
         new_samples = aday_samples | analysis_day_samples[-1][1]
         analysis_day_samples.append((analysis_day, new_samples))
@@ -816,20 +831,20 @@ def get_ratios_from_date(
     ...     datetime(2023, 1, 1),
     ...     [(datetime(2020,12,31), {'d1': (1.0, 1)})]
     ... )
-    (datetime.datetime(2020, 12, 31, 0, 0), {'d1': (1.0, 1)})
+    (datetime(2020, 12, 31, 0, 0), {'d1': (1.0, 1)})
 
     >>> get_ratios_from_date(
     ...     datetime(2023, 1, 13),
     ...     [(datetime(2022,12,31), {'d1': (1.0, 1)}),
     ...      (datetime(2023,1,12), {'d1': (1.0, 2)})]
     ... )
-    (datetime.datetime(2023, 1, 12, 0, 0), {'d1': (1.0, 2)})
+    (datetime(2023, 1, 12, 0, 0), {'d1': (1.0, 2)})
 
     >>> get_ratios_from_date(
     ...     datetime(2023, 1, 3),
     ...     [(datetime(2023,1,2), {'d1': (1.0, 1)})]
     ... )
-    (datetime.datetime(2023, 1, 2, 0, 0), {'d1': (1.0, 1)})
+    (datetime(2023, 1, 2, 0, 0), {'d1': (1.0, 1)})
 
     >>> get_ratios_from_date(
     ...     datetime(2020, 1, 1),
@@ -878,30 +893,205 @@ async def main(
     """Main body function"""
     start, end = utils.process_default_start_and_end(start, end)
 
-    seqr_project_map = get_seqr_dataset_id_map()
+    # seqr_project_map = get_seqr_dataset_id_map()
 
-    (
-        seqr_hosting_prop_map,
-        shared_computation_prop_map,
-    ) = await generate_proportionate_maps_of_datasets(
-        start, end, seqr_project_map=seqr_project_map
-    )
+    # (
+    #     seqr_hosting_prop_map,
+    #     shared_computation_prop_map,
+    # ) = await generate_proportionate_maps_of_datasets(
+    #     start, end, seqr_project_map=seqr_project_map
+    # )
     result = 0
+
+    seqr_hosting_prop_map = [
+        (
+            datetime(2022, 3, 15, 0, 0),
+            {
+                'perth-neuro': (0.14173207708533475, 1093814979763),
+                'circa': (0.10764050187625027, 830713807366),
+                'heartkids': (0.0565321585678481, 436286006326),
+                'acute-care': (0.603311396791594, 4656045807295),
+                'ravenscroft-rdstudy': (0.09078386567897288, 700622994050),
+            },
+        ),
+        (
+            datetime(2022, 6, 19, 0, 0),
+            {
+                'perth-neuro': (0.06300421847365897, 1248505420500),
+                'circa': (0.04717951232773811, 934919570542),
+                'heartkids': (0.022016611548674864, 436286006326),
+                'acute-care': (0.4467369432690812, 8852637310980),
+                'ravenscroft-rdstudy': (0.04688953627372208, 929173341416),
+                'mito-disease': (0.12573407997415362, 2491574123008),
+                'hereditary-neuro': (0.03959862855282285, 784695113919),
+                'ravenscroft-arch': (0.041585414893192896, 824065708070),
+                'ohmr4-epilepsy': (0.09415979549736375, 1865891172363),
+                'ohmr3-mendelian': (0.07309525918959164, 1448471697958),
+            },
+        ),
+        (
+            datetime(2022, 8, 10, 0, 0),
+            {
+                'perth-neuro': (0.062431583986535734, 1248505420500),
+                'circa': (0.04675070586844023, 934919570542),
+                'heartkids': (0.021816506359406653, 436286006326),
+                'acute-care': (0.4426766281570883, 8852637310980),
+                'ravenscroft-rdstudy': (0.046463365356821086, 929173341416),
+                'mito-disease': (0.12459130458316905, 2491574123008),
+                'hereditary-neuro': (0.0392387234400944, 784695113919),
+                'ravenscroft-arch': (0.04120745222170723, 824065708070),
+                'ohmr4-epilepsy': (0.0933039933382622, 1865891172363),
+                'ohmr3-mendelian': (0.07243090897192055, 1448471697958),
+                'validation': (0.009088827716554525, 181758173436),
+            },
+        ),
+        (
+            datetime(2022, 8, 14, 0, 0),
+            {
+                'perth-neuro': (0.054727919711966534, 1248505420500),
+                'circa': (0.04098196319666584, 934919570542),
+                'heartkids': (0.01912448687335423, 436286006326),
+                'acute-care': (0.471055073248316, 10746156904918),
+                'ravenscroft-rdstudy': (0.0407300786945318, 929173341416),
+                'mito-disease': (0.11944428516699243, 2724876777038),
+                'hereditary-neuro': (0.0349139094420624, 796489349836),
+                'ravenscroft-arch': (0.03612271213894967, 824065708070),
+                'ohmr4-epilepsy': (0.08179086818177685, 1865891172363),
+                'ohmr3-mendelian': (0.06349339096914339, 1448471697958),
+                'validation': (0.007967323617077637, 181758173436),
+                'kidgen': (0.02964798875916316, 676358152613),
+            },
+        ),
+        (
+            datetime(2022, 8, 15, 0, 0),
+            {
+                'perth-neuro': (0.054727919711966534, 1248505420500),
+                'circa': (0.04098196319666584, 934919570542),
+                'heartkids': (0.01912448687335423, 436286006326),
+                'acute-care': (0.471055073248316, 10746156904918),
+                'ravenscroft-rdstudy': (0.0407300786945318, 929173341416),
+                'mito-disease': (0.11944428516699243, 2724876777038),
+                'hereditary-neuro': (0.0349139094420624, 796489349836),
+                'ravenscroft-arch': (0.03612271213894967, 824065708070),
+                'ohmr4-epilepsy': (0.08179086818177685, 1865891172363),
+                'ohmr3-mendelian': (0.06349339096914339, 1448471697958),
+                'validation': (0.007967323617077637, 181758173436),
+                'kidgen': (0.02964798875916316, 676358152613),
+            },
+        ),
+        (
+            datetime(2022, 8, 16, 0, 0),
+            {
+                'perth-neuro': (0.05981658209875578, 1425750455445),
+                'circa': (0.049550705255516934, 1181059467240),
+                'heartkids': (0.018304141244543472, 436286006326),
+                'acute-care': (0.45084914705393586, 10746156904918),
+                'ravenscroft-rdstudy': (0.045475981867952056, 1083936921588),
+                'mito-disease': (0.11432071778073805, 2724876777038),
+                'hereditary-neuro': (0.05205541064431057, 1240760050649),
+                'ravenscroft-arch': (0.034573226957976586, 824065708070),
+                'ohmr4-epilepsy': (0.07828244562205619, 1865891172363),
+                'ohmr3-mendelian': (0.060769839425782485, 1448471697958),
+                'validation': (0.007625564952080628, 181758173436),
+                'kidgen': (0.028376237096351394, 676358152613),
+            },
+        ),
+        (
+            datetime(2022, 9, 13, 0, 0),
+            {
+                'perth-neuro': (0.05964867263063808, 1425750455445),
+                'circa': (0.049411612845479624, 1181059467240),
+                'heartkids': (0.018252760197467792, 436286006326),
+                'acute-care': (0.4495835809211508, 10746156904918),
+                'ravenscroft-rdstudy': (0.04534832750089091, 1083936921588),
+                'mito-disease': (0.11399981126545596, 2724876777038),
+                'hereditary-neuro': (0.05190928734526443, 1240760050649),
+                'ravenscroft-arch': (0.03447617741174805, 824065708070),
+                'ohmr4-epilepsy': (0.07806270114074078, 1865891172363),
+                'ohmr3-mendelian': (0.06059925409546831, 1448471697958),
+                'validation': (0.007653409130732567, 182935362559),
+                'kidgen': (0.02829658294844031, 676358152613),
+                'udn-aus-training': (0.00275782256652236, 65918764104),
+            },
+        ),
+        (
+            datetime(2022, 11, 9, 0, 0),
+            {
+                'perth-neuro': (0.05964867263063808, 1425750455445),
+                'circa': (0.049411612845479624, 1181059467240),
+                'heartkids': (0.018252760197467792, 436286006326),
+                'acute-care': (0.4495835809211508, 10746156904918),
+                'ravenscroft-rdstudy': (0.04534832750089091, 1083936921588),
+                'mito-disease': (0.11399981126545596, 2724876777038),
+                'hereditary-neuro': (0.05190928734526443, 1240760050649),
+                'ravenscroft-arch': (0.03447617741174805, 824065708070),
+                'ohmr4-epilepsy': (0.07806270114074078, 1865891172363),
+                'ohmr3-mendelian': (0.06059925409546831, 1448471697958),
+                'validation': (0.007653409130732567, 182935362559),
+                'kidgen': (0.02829658294844031, 676358152613),
+                'udn-aus-training': (0.00275782256652236, 65918764104),
+            },
+        ),
+        (
+            datetime(2022, 11, 10, 0, 0),
+            {
+                'perth-neuro': (0.05293066324245541, 1425750455445),
+                'circa': (0.043846565639204034, 1181059467240),
+                'heartkids': (0.016197019324135236, 436286006326),
+                'acute-care': (0.3989486449837882, 10746156904918),
+                'ravenscroft-rdstudy': (0.040240913094943404, 1083936921588),
+                'mito-disease': (0.10116043415014674, 2724876777038),
+                'hereditary-neuro': (0.04606293629771006, 1240760050649),
+                'ravenscroft-arch': (0.030593253059768264, 824065708070),
+                'ohmr4-epilepsy': (0.06927078782562322, 1865891172363),
+                'ohmr3-mendelian': (0.05377418423262083, 1448471697958),
+                'schr-neuro': (0.016776815597689364, 451903509498),
+                'validation': (0.006791433966419269, 182935362559),
+                'ibmdx': (0.01546337152171103, 416524328985),
+                'kidgen': (0.08615325091325737, 2320640422830),
+                'udn-aus-training': (0.0024472192106427693, 65918764104),
+                'rdp-kidney': (0.019342506939884825, 521013461567),
+            },
+        ),
+        (
+            datetime(2022, 11, 14, 0, 0),
+            {
+                'perth-neuro': (0.057447530653024256, 1705721146511),
+                'circa': (0.03977728134876989, 1181059467240),
+                'heartkids': (0.014693816614260276, 436286006326),
+                'acute-care': (0.36192327184325257, 10746156904918),
+                'ravenscroft-rdstudy': (0.047867349271016664, 1421268224254),
+                'mito-disease': (0.0917720006548532, 2724876777038),
+                'hereditary-neuro': (0.041787956483100734, 1240760050649),
+                'ravenscroft-arch': (0.02775397380825763, 824065708070),
+                'ohmr4-epilepsy': (0.06284194842679085, 1865891172363),
+                'ohmr3-mendelian': (0.048783543804147636, 1448471697958),
+                'schr-neuro': (0.015219803522514503, 451903509498),
+                'validation': (0.006161138864712132, 182935362559),
+                'ibmdx': (0.014028256732374301, 416524328985),
+                'kidgen': (0.07815759457392285, 2320640422830),
+                'ag-hidden': (0.07201705435094634, 2138316671221),
+                'udn-aus-training': (0.0022200992402655858, 65918764104),
+                'rdp-kidney': (0.017547379807790572, 521013461567),
+            },
+        ),
+    ]
 
     result += migrate_entries_from_bq(
         start, end, seqr_hosting_prop_map, mode=mode, output_path=output_path
     )
+    print(result)
 
-    def func_get_finalised_entries(batch):
-        return get_finalised_entries_for_batch(batch, shared_computation_prop_map)
+    # def func_get_finalised_entries(batch):
+    #     return get_finalised_entries_for_batch(batch, shared_computation_prop_map)
 
-    result += await utils.process_entries_from_hail_in_chunks(
-        start=start,
-        end=end,
-        billing_project=SEQR_HAIL_BILLING_PROJECT,
-        func_get_finalised_entries_for_batch=func_get_finalised_entries,
-        dry_run=dry_run,
-    )
+    # result += await utils.process_entries_from_hail_in_chunks(
+    #     start=start,
+    #     end=end,
+    #     billing_project=SEQR_HAIL_BILLING_PROJECT,
+    #     func_get_finalised_entries_for_batch=func_get_finalised_entries,
+    #     dry_run=dry_run,
+    # )
 
     if mode == 'dry-run':
         logger.info(f'Finished dry run, would have inserted {result} entries')
@@ -934,7 +1124,7 @@ if __name__ == '__main__':
     logging.getLogger('asyncio').setLevel(logging.ERROR)
     logging.getLogger('urllib3').setLevel(logging.WARNING)
 
-    test_start, test_end = datetime(2021, 8, 1), datetime(2022, 12, 6)
+    test_start, test_end = datetime(2022, 6, 1), datetime(2022, 12, 5)
     asyncio.new_event_loop().run_until_complete(
-        main(start=test_start, end=test_end, mode='local')
+        main(start=test_start, end=test_end, mode='local', output_path=os.getcwd())
     )
