@@ -855,7 +855,15 @@ def get_start_and_end_from_data(data) -> tuple[datetime | None, datetime | None]
     """
     Get the start and end times from the cloud function data.
     """
-    if data:
+    if data is not None:
+        # Convert str to json
+        if isinstance(data, str):
+            try:
+                data = dict(json.loads(data))
+            except ValueError:
+                return (None, None)
+
+        # Extract date attributes from dict
         dates = {}
         if data.get('attributes'):
             dates = data.get('attributes', {})
@@ -863,7 +871,7 @@ def get_start_and_end_from_data(data) -> tuple[datetime | None, datetime | None]
             dates = data
         elif data.get('message'):
             try:
-                dates = dict(json.loads(data['message']))
+                return get_start_and_end_from_data(data['message'])
             except ValueError:
                 dates = {}
 
@@ -975,3 +983,11 @@ def get_hail_entry(
         'cost_type': 'regular',
         'adjustment_info': None,
     }
+
+
+if __name__ == '__main__':
+    json_str = "{'start': '2022-01-01', 'end': '2022-01-02'}"
+    json_strt, json_end = datetime.fromisoformat('2022-01-01'), datetime.fromisoformat(
+        '2022-01-02'
+    )
+    get_start_and_end_from_data({'message': json_str})
