@@ -59,6 +59,7 @@ SEQR_HAIL_BILLING_PROJECT = 'seqr'
 ES_ANALYSIS_OBJ_INTRO_DATE = datetime(2022, 12, 31)
 
 SEQR_FIRST_LOAD = datetime(2021, 9, 1)
+SEQR_ROUND = 6
 
 GCP_BILLING_BQ_TABLE = (
     'billing-admin-290403.billing.gcp_billing_export_v1_01D012_20A6A2_CBD343'
@@ -312,7 +313,6 @@ def migrate_entries_from_bq(
             WHERE export_time >= @start
                 AND export_time <= @end
                 AND project.id = @project
-                AND invoice.month = '202211'
             ORDER BY usage_start_time
         """
 
@@ -338,12 +338,6 @@ def migrate_entries_from_bq(
         entries = []
         param_map, current_date = None, None
         for _, obj in enumerate(json_obj):
-
-            # if len(entries) != idx * 5:
-            #     print('AHHHHH BAD')
-
-            # if obj['cost'] == 0:
-            #     continue
 
             del obj['billing_account_id']
             del obj['project']
@@ -378,12 +372,21 @@ def migrate_entries_from_bq(
             nid = '-'.join([SERVICE_ID, 'seqr', billing_obj_to_key(obj)])
             obj['id'] = nid
 
-            entries.append(obj)
+            # For every seqr billing entry migrate it over
+            entries.append(obj)  # TODO uncomment
+            entries.extend(
+                utils.get_credits(
+                    entries=[obj],
+                    topic='seqr',
+                    project=utils.SEQR_PROJECT_FIELD,
+                )
+            )
 
             obj_entries = []
             for dataset, (ratio, dataset_size) in param_map.items():
 
-                if sum(x[0] for x in param_map.values()) != 1.0:
+                prop_map_sum = round(sum(x[0] for x in param_map.values()), SEQR_ROUND)
+                if prop_map_sum != 1.0:
                     logger.error(f"Prop map doesn't sum to one: {param_map}")
 
                 new_entry = {**obj}
@@ -402,19 +405,10 @@ def migrate_entries_from_bq(
                 entries.append(new_entry)
                 obj_entries.append(new_entry)
 
-            total_cost = round(sum(x['cost'] for x in obj_entries), 6)
-            if total_cost != round(obj['cost'], 6):
+            total_cost = round(sum(x['cost'] for x in obj_entries), SEQR_ROUND)
+            if total_cost != round(obj['cost'], SEQR_ROUND):
                 cost = obj['cost']
                 logger.error(f'Cost does not sum correctly. {obj_entries}\n{cost}')
-
-        # insert all entries here
-        entries.extend(
-            utils.get_credits(
-                entries=entries,
-                topic='seqr',
-                project=utils.SEQR_PROJECT_FIELD,
-            )
-        )
 
         result += utils.upsert_rows_into_bigquery(
             table=utils.GCP_AGGREGATE_DEST_TABLE,
@@ -811,7 +805,7 @@ async def main(start: datetime = None, end: datetime = None, dry_run=False):
 
     (
         seqr_hosting_prop_map,
-        _,  # shared_computation_prop_map,
+        shared_computation_prop_map,
     ) = await generate_proportionate_maps_of_datasets(start, end, projects)
     result = 0
 
@@ -819,16 +813,16 @@ async def main(start: datetime = None, end: datetime = None, dry_run=False):
         start, end, seqr_hosting_prop_map, dry_run=dry_run
     )
 
-    # def func_get_finalised_entries(batch):
-    #     return get_finalised_entries_for_batch(batch, shared_computation_prop_map)
+    def func_get_finalised_entries(batch):
+        return get_finalised_entries_for_batch(batch, shared_computation_prop_map)
 
-    # result += await utils.process_entries_from_hail_in_chunks(
-    #     start=start,
-    #     end=end,
-    #     billing_project=SEQR_HAIL_BILLING_PROJECT,
-    #     func_get_finalised_entries_for_batch=func_get_finalised_entries,
-    #     dry_run=dry_run,
-    # )
+    result += await utils.process_entries_from_hail_in_chunks(
+        start=start,
+        end=end,
+        billing_project=SEQR_HAIL_BILLING_PROJECT,
+        func_get_finalised_entries_for_batch=func_get_finalised_entries,
+        dry_run=dry_run,
+    )
 
     if dry_run:
         logger.info(f'Finished dry run, would have inserted {result} entries')
@@ -859,5 +853,5 @@ if __name__ == '__main__':
     logging.getLogger('asyncio').setLevel(logging.ERROR)
     logging.getLogger('urllib3').setLevel(logging.WARNING)
 
-    test_start, test_end = datetime(2022, 11, 1), datetime(2022, 12, 1)
+    test_start, test_end = datetime(2022, 6, 30), datetime(2022, 12, 6)
     asyncio.new_event_loop().run_until_complete(main(start=test_start, end=test_end))
