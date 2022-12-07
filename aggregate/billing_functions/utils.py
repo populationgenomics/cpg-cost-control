@@ -63,6 +63,8 @@ HAIL_SERVICE_FEE = 0.0
 # https://cloud.google.com/bigquery/quotas#:~:text=up%20to%2010%2C000%20parameters.
 DEFAULT_BQ_INSERT_CHUNK_SIZE = 40000
 ANALYSIS_RUNNER_PROJECT_ID = 'analysis-runner'
+
+# TODO: change back to 2
 DEFAULT_RANGE_INTERVAL = timedelta(days=1)
 
 
@@ -827,13 +829,13 @@ def date_range_iterator(
     """
     Iterate over a range of dates.
 
-    >>> list(date_range_iterator(datetime(2019, 1, 1), datetime(2019, 1, 2)))
+    >>> list(date_range_iterator(datetime(2019, 1, 1), datetime(2019, 1, 2), intv=timedelta(days=2)))
     [(datetime.datetime(2019, 1, 1, 0, 0), datetime.datetime(2019, 1, 2, 0, 0))]
 
-    >>> list(date_range_iterator(datetime(2019, 1, 1), datetime(2019, 1, 3)))
+    >>> list(date_range_iterator(datetime(2019, 1, 1), datetime(2019, 1, 3), intv=timedelta(days=2)))
     [(datetime.datetime(2019, 1, 1, 0, 0), datetime.datetime(2019, 1, 3, 0, 0))]
 
-    >>> list(date_range_iterator(datetime(2019, 1, 1), datetime(2019, 1, 4)))
+    >>> list(date_range_iterator(datetime(2019, 1, 1), datetime(2019, 1, 4), intv=timedelta(days=2)))
     [(datetime.datetime(2019, 1, 1, 0, 0), datetime.datetime(2019, 1, 3, 0, 0)), (datetime.datetime(2019, 1, 3, 0, 0), datetime.datetime(2019, 1, 4, 0, 0))]
 
     """  # noqa: E501
