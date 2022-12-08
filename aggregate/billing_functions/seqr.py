@@ -907,18 +907,17 @@ async def main(
     result += migrate_entries_from_bq(
         start, end, seqr_hosting_prop_map, mode=mode, output_path=output_path
     )
-    _ = shared_computation_prop_map
 
-    # def func_get_finalised_entries(batch):
-    #     return get_finalised_entries_for_batch(batch, shared_computation_prop_map)
+    def func_get_finalised_entries(batch):
+        return get_finalised_entries_for_batch(batch, shared_computation_prop_map)
 
-    # result += await utils.process_entries_from_hail_in_chunks(
-    #     start=start,
-    #     end=end,
-    #     billing_project=SEQR_HAIL_BILLING_PROJECT,
-    #     func_get_finalised_entries_for_batch=func_get_finalised_entries,
-    #     dry_run=dry_run,
-    # )
+    result += await utils.process_entries_from_hail_in_chunks(
+        start=start,
+        end=end,
+        billing_project=SEQR_HAIL_BILLING_PROJECT,
+        func_get_finalised_entries_for_batch=func_get_finalised_entries,
+        dry_run=mode == 'dry-run',
+    )
 
     if mode == 'dry-run':
         logger.info(f'Finished dry run, would have inserted {result} entries')
