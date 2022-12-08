@@ -170,7 +170,7 @@ async def airtable_upsert_topic_row(airtable: Airtable, df: DataFrame, topic: st
 
     def field_name(row):
         month = convert_date(row['month'], '%Y%m', '%B')
-        return f'{month} ({row["cost_category"]})'
+        return f"{month} ({row['cost_category']})"
 
     # Create airtable field names, then index on them
     df['field'] = df.apply(field_name, axis=1)

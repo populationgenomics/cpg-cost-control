@@ -31,18 +31,24 @@ class TestUtilsFunctions(unittest.TestCase):
 
         start, end = datetime(2019, 1, 1), datetime(2019, 1, 2)
         expected = [(datetime(2019, 1, 1, 0, 0), datetime(2019, 1, 2, 0, 0))]
-        self.assertEqual(expected, list(date_range_iterator(start, end)))
+        self.assertEqual(
+            expected, list(date_range_iterator(start, end, intv=timedelta(days=2)))
+        )
 
         start, end = datetime(2019, 1, 1), datetime(2019, 1, 3)
         expected = [(datetime(2019, 1, 1, 0, 0), datetime(2019, 1, 3, 0, 0))]
-        self.assertEqual(expected, list(date_range_iterator(start, end)))
+        self.assertEqual(
+            expected, list(date_range_iterator(start, end, intv=timedelta(days=2)))
+        )
 
         start, end = datetime(2019, 1, 1), datetime(2019, 1, 4)
         expected = [
             (datetime(2019, 1, 1, 0, 0), datetime(2019, 1, 3, 0, 0)),
             (datetime(2019, 1, 3, 0, 0), datetime(2019, 1, 4, 0, 0)),
         ]
-        self.assertEqual(expected, list(date_range_iterator(start, end)))
+        self.assertEqual(
+            expected, list(date_range_iterator(start, end, intv=timedelta(days=2)))
+        )
 
     def test_billing_row_topic(self):
         """

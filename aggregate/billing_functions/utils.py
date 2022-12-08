@@ -1,4 +1,4 @@
-# pylint: disable=global-statement,too-many-arguments,line-too-long
+# pylint: disable=global-statement,too-many-arguments,line-too-long,too-many-lines
 """
 Class of helper functions for billing aggregate functions
 """
@@ -13,7 +13,6 @@ import logging
 
 from io import StringIO
 from pathlib import Path
-from collections import defaultdict
 from datetime import date, datetime, timedelta
 from typing import Any, Iterator, Sequence, TypeVar, Iterable
 
@@ -64,8 +63,10 @@ HAIL_SERVICE_FEE = 0.0
 # https://cloud.google.com/bigquery/quotas#:~:text=up%20to%2010%2C000%20parameters.
 DEFAULT_BQ_INSERT_CHUNK_SIZE = 9000
 ANALYSIS_RUNNER_PROJECT_ID = 'analysis-runner'
+
 DEFAULT_RANGE_INTERVAL = timedelta(days=2)
 
+SEQR_PROJECT_ID = 'seqr-308602'
 
 HAIL_BASE = 'https://batch.hail.populationgenomics.org.au'
 HAIL_UI_URL = HAIL_BASE + '/batches/{batch_id}'
@@ -91,9 +92,9 @@ HAIL_PROJECT_FIELD = {
 }
 
 SEQR_PROJECT_FIELD = {
-    'id': 'seqr-308602',
+    'id': SEQR_PROJECT_ID,
     'number': '1021400127367',
-    'name': 'seqr-308602',
+    'name': SEQR_PROJECT_ID,
     'labels': [],
     'ancestry_numbers': '/648561325637/',
     'ancestors': [
@@ -268,10 +269,10 @@ def get_credits(
     """
     Get a hail / seqr credit for each entry.
 
-    Dependent on where the cost should be attributed, we apply a "credit"
+    Dependent on where the cost should be attributed, we apply a 'credit'
     to that topic in order to balanace where money is spent. For example,
     say $DATASET runs a job using Hail. We determine the cost of that job,
-    apply a "debit" to $DATASET, and an equivalent "credit" to Hail.
+    apply a 'debit' to $DATASET, and an equivalent 'credit' to Hail.
 
     The rough idea being the Hail topic should be roughly $0,
     minus adminstrative overhead.
@@ -482,7 +483,7 @@ async def process_entries_from_hail_in_chunks(
             if len(jobs) > 10000 and len(entries) > 1000:
                 logger.info(
                     f'Expecting large number of jobs ({len(jobs)}) from '
-                    f'batch {batch["id"]}, inserting contents early'
+                    f"batch {batch['id']}, inserting contents early"
                 )
                 result += upsert_rows_into_bigquery(
                     table=GCP_AGGREGATE_DEST_TABLE, objs=entries, dry_run=dry_run
@@ -570,6 +571,7 @@ def upsert_rows_into_bigquery(
         logger.info(f'Will insert {len(objs)} rows in {n_chunks} chunks')
 
     inserts = 0
+    inserted_ids = set()
 
     for chunk_idx, chunked_objs in enumerate(chunk(objs, chunk_size)):
 
@@ -578,15 +580,10 @@ def upsert_rows_into_bigquery(
             WHERE id IN UNNEST(@ids);
         """
 
-        ids = set(o['id'] for o in chunked_objs)
-        if len(ids) != len(chunked_objs):
-            counter = defaultdict(int)
-            for o in chunked_objs:
-                counter[o['id']] += 1
-            duplicates = [f'{k} ({v})' for k, v in counter.items() if v > 1]
-            raise ValueError(
-                'There are multiple rows with the same id: ' + ', '.join(duplicates)
-            )
+        # NOTE: it's possible to have valid duplicate rows
+        # allow for adding duplicates on first upload only
+        # Protects us against duplicate ids falling across chunks
+        ids = set(o['id'] for o in chunked_objs) - inserted_ids
 
         job_config = bq.QueryJobConfig(
             query_parameters=[
@@ -644,6 +641,7 @@ def upsert_rows_into_bigquery(
             raise e
 
         inserts += nrows
+        inserted_ids = inserted_ids.union(ids)
 
     return inserts
 
@@ -831,13 +829,13 @@ def date_range_iterator(
     """
     Iterate over a range of dates.
 
-    >>> list(date_range_iterator(datetime(2019, 1, 1), datetime(2019, 1, 2)))
+    >>> list(date_range_iterator(datetime(2019, 1, 1), datetime(2019, 1, 2), intv=timedelta(days=2)))
     [(datetime.datetime(2019, 1, 1, 0, 0), datetime.datetime(2019, 1, 2, 0, 0))]
 
-    >>> list(date_range_iterator(datetime(2019, 1, 1), datetime(2019, 1, 3)))
+    >>> list(date_range_iterator(datetime(2019, 1, 1), datetime(2019, 1, 3), intv=timedelta(days=2)))
     [(datetime.datetime(2019, 1, 1, 0, 0), datetime.datetime(2019, 1, 3, 0, 0))]
 
-    >>> list(date_range_iterator(datetime(2019, 1, 1), datetime(2019, 1, 4)))
+    >>> list(date_range_iterator(datetime(2019, 1, 1), datetime(2019, 1, 4), intv=timedelta(days=2)))
     [(datetime.datetime(2019, 1, 1, 0, 0), datetime.datetime(2019, 1, 3, 0, 0)), (datetime.datetime(2019, 1, 3, 0, 0), datetime.datetime(2019, 1, 4, 0, 0))]
 
     """  # noqa: E501
@@ -857,7 +855,15 @@ def get_start_and_end_from_data(data) -> tuple[datetime | None, datetime | None]
     """
     Get the start and end times from the cloud function data.
     """
-    if data:
+    if data is not None:
+        # Convert str to json
+        if isinstance(data, str):
+            try:
+                data = dict(json.loads(data))
+            except ValueError:
+                return (None, None)
+
+        # Extract date attributes from dict
         dates = {}
         if data.get('attributes'):
             dates = data.get('attributes', {})
@@ -865,7 +871,7 @@ def get_start_and_end_from_data(data) -> tuple[datetime | None, datetime | None]
             dates = data
         elif data.get('message'):
             try:
-                dates = dict(json.loads(data['message']))
+                return get_start_and_end_from_data(data['message'])
             except ValueError:
                 dates = {}
 
@@ -977,3 +983,11 @@ def get_hail_entry(
         'cost_type': 'regular',
         'adjustment_info': None,
     }
+
+
+if __name__ == '__main__':
+    json_str = "{'start': '2022-01-01', 'end': '2022-01-02'}"
+    json_strt, json_end = datetime.fromisoformat('2022-01-01'), datetime.fromisoformat(
+        '2022-01-02'
+    )
+    get_start_and_end_from_data({'message': json_str})

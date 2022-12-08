@@ -1,4 +1,4 @@
-# pylint: disable=logging-format-interpolation,too-many-locals,too-many-branches
+# pylint: disable=logging-format-interpolation,too-many-locals,too-many-branches,too-many-lines,c-extension-no-member   # noqa: E501
 """
 This cloud function runs DAILY, and distributes the cost of
 SEQR on the sample size within SEQR.
@@ -27,9 +27,9 @@ TO DO :
     or some other metric (exome vs genome)
 - Getting latest cram for sample by sequence type (eg: exome / genome)
 """
+from typing import Literal
 
-
-import json
+import os
 import asyncio
 import hashlib
 import logging
@@ -37,6 +37,7 @@ import logging
 from collections import defaultdict
 from datetime import datetime, timedelta, date
 
+import rapidjson
 import google.cloud.bigquery as bq
 
 from sample_metadata.apis import SampleApi, ProjectApi, AnalysisApi
@@ -56,20 +57,21 @@ ProportionateMapType = list[tuple[datetime, dict[str, tuple[float, int]]]]
 
 SERVICE_ID = 'seqr'
 SEQR_HAIL_BILLING_PROJECT = 'seqr'
-ES_ANALYSIS_OBJ_INTRO_DATE = datetime(2022, 12, 31)
+ES_ANALYSIS_OBJ_INTRO_DATE = datetime(2022, 6, 21)
 
 SEQR_FIRST_LOAD = datetime(2021, 9, 1)
+SEQR_ROUND = 6
 
 GCP_BILLING_BQ_TABLE = (
     'billing-admin-290403.billing.gcp_billing_export_v1_01D012_20A6A2_CBD343'
 )
-DESTINATION_TABLE = 'sabrina-dev-337923.billing.aggregate'
 
 BASE = 'https://batch.hail.populationgenomics.org.au'
 BATCHES_API = BASE + '/api/v1alpha/batches'
 JOBS_API = BASE + '/api/v1alpha/batches/{batch_id}/jobs/resources'
 
 JOB_ATTRIBUTES_IGNORE = {'name', 'dataset', 'samples'}
+RunMode = Literal['prod', 'local', 'dry-run']
 
 
 logger = utils.logger
@@ -292,7 +294,8 @@ def migrate_entries_from_bq(
     start: datetime,
     end: datetime,
     prop_map: ProportionateMapType,
-    dry_run: bool = False,
+    mode: RunMode,
+    output_path: str,
 ) -> int:
     """
     Migrate entries from BQ to GCP, using the given proportionate maps
@@ -306,6 +309,7 @@ def migrate_entries_from_bq(
             f'Migrating seqr BQ data [{istart.isoformat()}, {iend.isoformat()}]'
         )
         # pylint: disable=too-many-branches
+
         _query = f"""
             SELECT * FROM `{GCP_BILLING_BQ_TABLE}`
             WHERE export_time >= @start
@@ -318,25 +322,35 @@ def migrate_entries_from_bq(
             query_parameters=[
                 bq.ScalarQueryParameter('start', 'STRING', str(istart)),
                 bq.ScalarQueryParameter('end', 'STRING', str(iend)),
-                bq.ScalarQueryParameter('project', 'STRING', 'seqr-308602'),
+                bq.ScalarQueryParameter('project', 'STRING', utils.SEQR_PROJECT_ID),
             ]
         )
 
-        df = (
-            utils.get_bigquery_client()
-            .query(_query, job_config=job_config)
-            .result()
-            .to_dataframe()
-        )
-        json_obj = json.loads(df.to_json(orient='records'))
+        temp_file = f'seqr-query-{istart.isoformat()}-{iend.isoformat}.json'
 
-        entries_by_id = {}
+        if mode == 'local' and os.path.exists(temp_file):
+            logger.info(f'Loading BQ data from {temp_file}')
+            with open(temp_file, encoding='utf-8') as f:
+                json_obj = rapidjson.load(f)
+        else:
+            logger.info(f'Loading BQ data from {temp_file}')
+
+            df = (
+                utils.get_bigquery_client()
+                .query(_query, job_config=job_config)
+                .result()
+                .to_dataframe()
+            )
+            json_str = df.to_json(orient='records')
+            if mode == 'local':
+                with open(temp_file, 'w+', encoding='utf-8') as f:
+                    f.write(json_str)
+            json_obj = rapidjson.loads(json_str)
+            logger.info(f'Received {len(json_obj)} rows')
+
+        entries = []
         param_map, current_date = None, None
-        for obj in json_obj:
-
-            if obj['cost'] == 0:
-                # come on now
-                continue
+        for _, obj in enumerate(json_obj):
 
             del obj['billing_account_id']
             del obj['project']
@@ -361,12 +375,31 @@ def migrate_entries_from_bq(
                     dt=usage_start_time, prop_map=prop_map
                 )
 
+            # Data transforms and key changes
+            obj['topic'] = 'seqr'
+            obj['service']['id'] = SERVICE_ID
+            obj['labels'] = labels
+            dates = ['usage_start_time', 'usage_end_time', 'export_time']
+            for k in dates:
+                obj[k] = utils.to_bq_time(datetime.fromtimestamp(int(obj[k] / 1000)))
+            nid = '-'.join([SERVICE_ID, 'seqr', billing_obj_to_key(obj)])
+            obj['id'] = nid
+
+            # For every seqr billing entry migrate it over
+            entries.append(obj)
+            entries.extend(
+                utils.get_credits(
+                    entries=[obj],
+                    topic='seqr',
+                    project=utils.SEQR_PROJECT_FIELD,
+                )
+            )
+
             for dataset, (ratio, dataset_size) in param_map.items():
 
-                new_entry = {**obj}
+                new_entry = obj.copy()
 
                 new_entry['topic'] = dataset
-                new_entry['service']['id'] = SERVICE_ID
                 new_entry['labels'] = [
                     *labels,
                     {'key': 'proportion', 'value': ratio},
@@ -374,40 +407,31 @@ def migrate_entries_from_bq(
                 ]
                 new_entry['cost'] *= ratio
 
-                dates = ['usage_start_time', 'usage_end_time', 'export_time']
-                for k in dates:
-                    new_entry[k] = utils.to_bq_time(
-                        datetime.fromtimestamp(int(obj[k] / 1000))
-                    )
-
                 nid = '-'.join([SERVICE_ID, dataset, billing_obj_to_key(new_entry)])
-
                 new_entry['id'] = nid
-                if nid in entries_by_id:
-                    if new_entry != entries_by_id[nid]:
 
-                        logger.warning(
-                            f'WARNING: duplicate entry {nid} with diff values'
-                        )
-                    continue
+                entries.append(new_entry)
 
-                entries_by_id[nid] = new_entry
-
-        # insert all entries here
-        entries = list(entries_by_id.values())
-        entries.extend(
-            utils.get_credits(
-                entries=entries_by_id.values(),
-                topic='seqr',
-                project=utils.SEQR_PROJECT_FIELD,
+        if mode == 'dry-run':
+            result += len(entries)
+        elif mode == 'prod':
+            result += utils.upsert_rows_into_bigquery(
+                table=utils.GCP_AGGREGATE_DEST_TABLE, objs=entries, dry_run=False
             )
-        )
+        elif mode == 'local':
 
-        result += utils.upsert_rows_into_bigquery(
-            table=utils.GCP_AGGREGATE_DEST_TABLE,
-            objs=entries,
-            dry_run=dry_run,
-        )
+            with open(
+                os.path.join(
+                    output_path,
+                    'load',
+                    f'seqr-hosting-{istart.isoformat()}-{iend.isoformat()}.json',
+                ),
+                'w+',
+                encoding='utf-8',
+            ) as f:
+                # needs to be JSONL (line delimited JSON)
+                f.writelines(rapidjson.dumps(e) + '\n' for e in entries)
+            result += len(entries)
 
     return result
 
@@ -415,9 +439,7 @@ def migrate_entries_from_bq(
 def billing_obj_to_key(obj: dict[str, any]) -> str:
     """Convert a billing row to a hash which will be the row key"""
     identifier = hashlib.md5()
-    for k, v in obj.items():
-        identifier.update((k + str(v)).encode('utf-8'))
-
+    identifier.update(rapidjson.dumps(obj, sort_keys=True).encode())
     return identifier.hexdigest()
 
 
@@ -425,12 +447,16 @@ def billing_obj_to_key(obj: dict[str, any]) -> str:
 
 
 async def generate_proportionate_maps_of_datasets(
-    start: datetime, end: datetime, projects: list[str]
+    start: datetime,
+    end: datetime,
+    seqr_project_map: dict[str, int],
 ) -> tuple[ProportionateMapType, ProportionateMapType]:
     """
     Generate a proportionate map of datasets from list of samples
     in the relevant joint-calls (< 2022-06-01) or es-index (>= 2022-06-01)
     """
+
+    projects = list(seqr_project_map.keys())
 
     # pylint: disable=too-many-locals
     sm_projects = await papi.get_all_projects_async()
@@ -440,7 +466,7 @@ async def generate_proportionate_maps_of_datasets(
     missing_projects = set(projects) - set(sm_pid_to_dataset.values())
     if missing_projects:
         raise ValueError(
-            f'The datasets {", ".join(missing_projects)} were not found in SM'
+            f"The datasets {', '.join(missing_projects)} were not found in SM"
         )
 
     logger.info(f'Getting proportionate map for projects: {filtered_projects}')
@@ -450,14 +476,16 @@ async def generate_proportionate_maps_of_datasets(
     sample_file_sizes_by_project = await aapi.get_sample_file_sizes_async(
         project_names=projects, start_date=str(start.date()), end_date=str(end.date())
     )
-    # this looks like {'dataset': [{"sample_id": "CPG123", "dates": [...]}, ...]}
+    # this looks like {'dataset': [{'sample_id': 'CPG123', 'dates': [...]}, ...]}
     file_sizes_by_project: dict[str, list[dict]] = {
         p['project']: p['samples'] for p in sample_file_sizes_by_project
     }
 
     # these are used to determine if a sample is _in_ seqr.
     joint_call_analyses = await get_analysis_objects_for_seqr_hosting_prop_map(
-        start, end
+        start,
+        end,
+        projects=projects,
     )
 
     seqr_hosting_map = get_seqr_hosting_prop_map_from(
@@ -474,7 +502,7 @@ async def generate_proportionate_maps_of_datasets(
 
 
 async def get_analysis_objects_for_seqr_hosting_prop_map(
-    start: datetime, end: datetime
+    start: datetime, end: datetime, projects: list[str]
 ) -> list[dict]:
     """
     Fetch the relevant analysis objects + crams from sample-metadata
@@ -484,12 +512,16 @@ async def get_analysis_objects_for_seqr_hosting_prop_map(
     timeit_start = datetime.now()
     relevant_analysis = []
 
+    # unfortunately, the way ES-indices are progressive, basically
+    # just have to request all es-indices
+    start = min(start, ES_ANALYSIS_OBJ_INTRO_DATE)
+
     if end > ES_ANALYSIS_OBJ_INTRO_DATE:
         es_indices = await aapi.query_analyses_async(
             AnalysisQueryModel(
                 type=AnalysisType('es-index'),
                 status=AnalysisStatus('completed'),
-                projects=['seqr'],
+                projects=['seqr', *projects],
             )
         )
         relevant_analysis.extend(a for a in es_indices if a['timestamp_completed'])
@@ -567,7 +599,7 @@ def get_seqr_hosting_prop_map_from(
             lambda el: datetime.fromisoformat(el['timestamp_completed']).date(),
             relevant_analyses,
         )
-    )
+    ) - timedelta(days=2)
     date_sizes_by_sample: dict[str, list[tuple[datetime.date, int]]] = defaultdict(list)
     sample_to_project = {}
     # let's loop through, and basically get the potential differential
@@ -604,18 +636,10 @@ def get_seqr_hosting_prop_map_from(
     ordered_sizes_by_day = list(
         sorted(sizes_by_date_then_sample.items(), key=lambda el: el[0])
     )
-
-    for analysis in relevant_analyses:
-
-        # Using timestamp_completed as the start time for the propmap
-        # is a small problem because then this script won't charge the new samples
-        # for the current joint-call as:
-        #   joint_call.completed_timestamp > hail_joint_call.started_timestamp
-        # We might be able to roughly accept this by subtracting a day from the
-        # joint-call, and sort of hope that no joint-call runs over 24 hours.
-        dt = datetime.fromisoformat(analysis['timestamp_completed']) - timedelta(days=2)
-        analysis_day = max(dt.date(), min_date)
-        samples = set(analysis['sample_ids'])
+    day_samples = get_relevant_samples_for_day_from_jc_es(
+        relevant_analyses, min_date=min_date
+    )
+    for analysis_day, samples in day_samples:
 
         # now we just need to sum up all sizes_by_date starting from the start to now
         # only selecting the sampleIDs we want
@@ -632,7 +656,7 @@ def get_seqr_hosting_prop_map_from(
         total_size = sum(size_per_project.values())
         proportioned_datasets.append(
             (
-                dt,
+                datetime(analysis_day.year, analysis_day.month, analysis_day.day),
                 {
                     project: (size / total_size, size)
                     for project, size in size_per_project.items()
@@ -654,6 +678,77 @@ def get_seqr_hosting_prop_map_from(
 
     # We'll sort ASC, which makes it easy to find the relevant entry later
     return proportioned_datasets
+
+
+def get_relevant_samples_for_day_from_jc_es(
+    relevant_analyses: list[dict], min_date: date
+):
+    """
+    We can have multiple joint-calls and es-indices on one day, and
+    es-indices are cumulative, and only deal with a single project.
+
+    ORIGINAL ATTEMPT:
+        Keep track of which dataset an es-index belongs to, and then on
+        a second pass evaluate the total samples for all DAY changes.
+        We add a *SPECIAL CASE* if the project-name is seqr, then that
+        sets the samples for the whole day to cover the joint-calls.
+        This unfortunately fails because the samples reported in some
+        es-indices are very small, and blows out any numbers
+
+    CURRENT IMPLEMENTATION
+        We just take a cumulative samples seen over all time. So we
+        CANNOT tell if a sample is removed once it's in an ES index.
+        Though I think this is rare.
+    """
+
+    day_project_delta_sample_map = defaultdict(set)
+    for analysis in relevant_analyses:
+        # Using timestamp_completed as the start time for the propmap
+        # is a small problem because then this script won't charge the new samples
+        # for the current joint-call as:
+        #   joint_call.completed_timestamp > hail_joint_call.started_timestamp
+        # We might be able to roughly accept this by subtracting a day from the
+        # joint-call, and sort of hope that no joint-call runs over 24 hours.
+
+        dt = datetime.fromisoformat(analysis['timestamp_completed']).date() - timedelta(
+            days=2
+        )
+        # get the changes of samples for a specific day
+        day_project_delta_sample_map[max(min_date, dt)] |= set(analysis['sample_ids'])
+
+    analysis_day_samples = []
+
+    for analysis_day, aday_samples in sorted(
+        day_project_delta_sample_map.items(), key=lambda r: r[0]
+    ):
+        if len(analysis_day_samples) == 0:
+            analysis_day_samples.append((analysis_day, aday_samples))
+            continue
+
+        new_samples = aday_samples | analysis_day_samples[-1][1]
+        analysis_day_samples.append((analysis_day, new_samples))
+
+    # ORIGINAL ATTEMPT for being faithful to ES-indices
+    #
+    # relevant_samples_by_dataset = {}
+    # for analysis_day, aday_projects in sorted(
+    #     day_project_delta_sample_map.items(), key=lambda r: r[0]
+    # ):
+    #     # update the relevant_samples_by_dataset
+    #     relevant_samples_by_dataset.update(
+    #         {k: s for k, s in aday_projects.items() if k != 'seqr' and len(s) > 0}
+    #     )
+    #     if 'seqr' in aday_projects:
+    #         analysis_day_samples.append((analysis_day, aday_projects['seqr']))
+    #         continue
+    #
+    #     day_samples = set(
+    #         s for samples in relevant_samples_by_dataset.values() for s in samples
+    #     )
+
+    #     analysis_day_samples.append((analysis_day, list(day_samples)))
+
+    return analysis_day_samples
 
 
 def get_shared_computation_prop_map(
@@ -777,33 +872,40 @@ def get_ratios_from_date(
 # UTIL specific to seqr billing
 
 
-def get_seqr_datasets() -> list[str]:
+def get_seqr_dataset_id_map() -> dict[str, int]:
     """
     Get Hail billing projects, same names as dataset
     """
 
     projects = papi.get_seqr_projects()
-    projects = [x['name'] for x in projects]
+    projects = {x['name']: x['id'] for x in projects}
     return projects
 
 
 # DRIVER functions
 
 
-async def main(start: datetime = None, end: datetime = None, dry_run=False):
+async def main(
+    start: datetime = None,
+    end: datetime = None,
+    mode: RunMode = 'prod',
+    output_path: str = None,
+):
     """Main body function"""
     start, end = utils.process_default_start_and_end(start, end)
 
-    projects = get_seqr_datasets()
+    seqr_project_map = get_seqr_dataset_id_map()
 
     (
         seqr_hosting_prop_map,
         shared_computation_prop_map,
-    ) = await generate_proportionate_maps_of_datasets(start, end, projects)
+    ) = await generate_proportionate_maps_of_datasets(
+        start, end, seqr_project_map=seqr_project_map
+    )
     result = 0
 
     result += migrate_entries_from_bq(
-        start, end, seqr_hosting_prop_map, dry_run=dry_run
+        start, end, seqr_hosting_prop_map, mode=mode, output_path=output_path
     )
 
     def func_get_finalised_entries(batch):
@@ -814,11 +916,13 @@ async def main(start: datetime = None, end: datetime = None, dry_run=False):
         end=end,
         billing_project=SEQR_HAIL_BILLING_PROJECT,
         func_get_finalised_entries_for_batch=func_get_finalised_entries,
-        dry_run=dry_run,
+        dry_run=mode == 'dry-run',
     )
 
-    if dry_run:
+    if mode == 'dry-run':
         logger.info(f'Finished dry run, would have inserted {result} entries')
+    elif mode == 'local':
+        logger.info(f'Wrote {result} entries to local disk for inspection')
     else:
         logger.info(f'Inserted {result} entries')
 
@@ -846,5 +950,7 @@ if __name__ == '__main__':
     logging.getLogger('asyncio').setLevel(logging.ERROR)
     logging.getLogger('urllib3').setLevel(logging.WARNING)
 
-    test_start, test_end = datetime(2022, 11, 1), datetime(2022, 11, 23)
-    asyncio.new_event_loop().run_until_complete(main(start=test_start, end=test_end))
+    test_start, test_end = datetime(2022, 10, 1), datetime(2022, 10, 3)
+    asyncio.new_event_loop().run_until_complete(
+        main(start=test_start, end=test_end, mode='local', output_path=os.getcwd())
+    )

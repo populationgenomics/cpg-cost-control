@@ -57,7 +57,7 @@ def gcp_cost_control(data, unused_context):
 
     currency = pubsub_budget_notification_data['currencyCode']
     post_slack_message(
-        f'*Warning:* disabled billing for GCP project "{budget_project_id}", '
+        f"*Warning:* disabled billing for GCP project '{budget_project_id}', "
         f'which is over budget ({cost} {currency} > {budget} {currency}).'
     )
 
