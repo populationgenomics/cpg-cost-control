@@ -1,4 +1,4 @@
-# pylint: disable=global-statement,too-many-arguments,line-too-long
+# pylint: disable=global-statement,too-many-arguments,line-too-long,too-many-lines
 """
 Class of helper functions for billing aggregate functions
 """
@@ -66,6 +66,7 @@ ANALYSIS_RUNNER_PROJECT_ID = 'analysis-runner'
 
 DEFAULT_RANGE_INTERVAL = timedelta(days=2)
 
+SEQR_PROJECT_ID = 'seqr-308602'
 
 HAIL_BASE = 'https://batch.hail.populationgenomics.org.au'
 HAIL_UI_URL = HAIL_BASE + '/batches/{batch_id}'
@@ -91,9 +92,9 @@ HAIL_PROJECT_FIELD = {
 }
 
 SEQR_PROJECT_FIELD = {
-    'id': 'seqr-308602',
+    'id': SEQR_PROJECT_ID,
     'number': '1021400127367',
-    'name': 'seqr-308602',
+    'name': SEQR_PROJECT_ID,
     'labels': [],
     'ancestry_numbers': '/648561325637/',
     'ancestors': [
