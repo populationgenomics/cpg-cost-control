@@ -599,7 +599,7 @@ def get_seqr_hosting_prop_map_from(
             lambda el: datetime.fromisoformat(el['timestamp_completed']).date(),
             relevant_analyses,
         )
-    )
+    ) - timedelta(days=2)
     date_sizes_by_sample: dict[str, list[tuple[datetime.date, int]]] = defaultdict(list)
     sample_to_project = {}
     # let's loop through, and basically get the potential differential
