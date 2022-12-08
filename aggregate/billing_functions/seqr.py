@@ -307,7 +307,6 @@ def migrate_entries_from_bq(
         )
         # pylint: disable=too-many-branches
 
-        # TODO: remove Nov invoice month filter
         _query = f"""
             SELECT * FROM `{GCP_BILLING_BQ_TABLE}`
             WHERE export_time >= @start

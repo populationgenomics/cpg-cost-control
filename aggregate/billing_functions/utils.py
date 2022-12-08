@@ -64,7 +64,6 @@ HAIL_SERVICE_FEE = 0.0
 DEFAULT_BQ_INSERT_CHUNK_SIZE = 9000
 ANALYSIS_RUNNER_PROJECT_ID = 'analysis-runner'
 
-# TODO: change back to 2
 DEFAULT_RANGE_INTERVAL = timedelta(days=2)
 
 
