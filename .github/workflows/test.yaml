@@ -37,7 +37,8 @@ jobs:
             --ignore gcp_cost_report \
             --ignore aggregate/__main__.py \
             --ignore aggregate/main.py \
-            --ignore aggregate/local.py
+            --ignore aggregate/local.py \
+            --ignore aggregate/billing_functions/main.py
 
       - name: "Run unit tests"
         id: runtests
