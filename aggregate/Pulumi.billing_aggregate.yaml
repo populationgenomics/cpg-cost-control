@@ -1,12 +1,15 @@
 config:
   opts:name: aggregate-billing
+  opts:type: cloud-run
+  opts:dockerfile: billing_functions/Dockerfile
+  opts:imagename: aggregate-billing-image
   opts:service_account: aggregate-billing@billing-admin-290403.iam.gserviceaccount.com
   opts:functions:
     - gcp
     - hail
     - seqr
-  opts:memory: 2048
-  opts:timeout: 540
+  opts:memory: 8192
+  opts:timeout: 3600
   opts:cron: '0 8 * * *' # Run at 8am every day
   opts:slack_channel: '#software-alerts'
 

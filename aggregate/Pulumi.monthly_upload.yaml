@@ -1,5 +1,6 @@
 config:
   opts:name: monthly-upload
+  opts:type: function
   opts:service_account: aggregate-billing@billing-admin-290403.iam.gserviceaccount.com
   opts:functions:
     - monthly_upload

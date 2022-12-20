@@ -56,7 +56,7 @@ def from_request(request):
     From request object, get start and end time if present
     """
     start, end = utils.get_start_and_end_from_request(request)
-    main(start, end)
+    asyncio.new_event_loop().run_until_complete(main(start, end))
 
 
 def from_pubsub(data, _):
@@ -64,7 +64,7 @@ def from_pubsub(data, _):
     From pubsub message, get start and end time if present
     """
     start, end = utils.get_start_and_end_from_data(data)
-    main(start, end)
+    asyncio.new_event_loop().run_until_complete(main(start, end))
 
 
 #################

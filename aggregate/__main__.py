@@ -28,10 +28,12 @@ Creates the following:
 import os
 import ast
 import time
+import subprocess as sp
 from base64 import b64encode
 
 import pulumi
 import pulumi_gcp as gcp
+import pulumi_docker as docker
 
 
 # NOTE: Uncomment the below code when launching pulumi locally
@@ -49,6 +51,9 @@ import pulumi_gcp as gcp
 
 # File path to where the Cloud Function's source code is located.
 PATH_TO_SOURCE_CODE = './'
+DOCKER_REGISTRY = 'billing-docker-registry'
+DOCKER_IMAGE = 'billing-aggregate-image'
+GCP_SERVICE_ACCOUNT = 'billing-admin-290403@appspot.gserviceaccount.com	'
 
 
 def main():
@@ -62,6 +67,9 @@ def main():
 
     config_values = {
         'NAME': opts.get('name'),
+        'TYPE': opts.get('type'),
+        'DOCKERFILE': opts.get('dockerfile'),
+        'DOCKERIMAGE': opts.get('imagename'),
         'CRON': opts.get('cron'),
         'MEMORY': int(opts.get('memory')),
         'TIMEOUT': int(opts.get('timeout')),
@@ -78,10 +86,18 @@ def main():
     name = config_values['NAME']
     bucket_name = f"{name}-{config_values['PROJECT']}"
 
+    # Configure docker properly. Only needs to be run once, but is essential
+    configure_docker()
+
     # Start by enabling all cloud function services
     cloud_service = gcp.projects.Service(
         'cloudfunctions-service',
         service='cloudfunctions.googleapis.com',
+        disable_on_destroy=False,
+    )
+    cloudrun_service = gcp.projects.Service(
+        'cloudrun-service',
+        service='run.googleapis.com',
         disable_on_destroy=False,
     )
 
@@ -149,20 +165,59 @@ def main():
         project=config_values['PROJECT'],
     )
 
+    images = {}
     for function in functions:
-        # Create the function and it's corresponding pubsub and subscription.
-        fxn, _, _ = create_cloud_function(
-            name=function,
-            config_values=config_values,
-            service_account=config_values['GCP_SERVICE_ACCOUNT'],
-            pubsub_topic=pubsub,
-            cloud_service=cloud_service,
-            function_bucket=function_bucket,
-            source_archive_object=source_archive_object,
-            slack_channel=slack_channel,
-        )
+        if config_values.get('TYPE') == 'function':
+            # Create the function and it's corresponding pubsub and subscription.
+            fxn, _, _ = create_cloud_function(
+                name=function,
+                config=config_values,
+                service_account=config_values['GCP_SERVICE_ACCOUNT'],
+                pubsub_topic=pubsub,
+                cloud_service=cloud_service,
+                function_bucket=function_bucket,
+                source_archive_object=source_archive_object,
+                slack_channel=slack_channel,
+            )
+        else:
+            fxn, image, _, _ = create_cloudrun_job(
+                name=function,
+                config=config_values,
+                service_account=config_values['GCP_SERVICE_ACCOUNT'],
+                pubsub_topic=pubsub,
+                cloudrun_service=cloudrun_service,
+                slack_channel=slack_channel,
+                prebuilt_images=images,
+            )
+            images[config_values['DOCKERIMAGE']] = image
 
         pulumi.export(f'{function}_fxn_name', fxn.name)
+
+
+def configure_docker():
+    sp.check_output(['gcloud', 'auth', 'configure-docker'])
+
+
+def setup_docker_image(name, dockerfile, project):
+    # Get dockerfile folder
+    path = os.path.dirname(os.path.abspath(dockerfile))
+
+    # Dockerfile is assumed to be in the root folder of the build context
+    image = docker.Image(
+        name,
+        build=docker.DockerBuild(
+            context=path,
+            extra_options=[
+                '--quiet'  # see https://github.com/pulumi/pulumi-docker/issues/289
+            ],
+        ),
+        image_name=f'gcr.io/{project}/{name}:latest',
+    )
+
+    pulumi.export('base_image_name', image.base_image_name)
+    pulumi.export('full_image_name', image.image_name)
+
+    return image
 
 
 def b64encode_str(s: str) -> str:
@@ -171,7 +226,7 @@ def b64encode_str(s: str) -> str:
 
 def create_cloud_function(
     name: str = '',
-    config_values: dict = None,
+    config: dict = None,
     service_account: str = None,
     pubsub_topic: gcp.pubsub.Topic = None,
     function_bucket: gcp.storage.Bucket = None,
@@ -190,7 +245,7 @@ def create_cloud_function(
 
     # Create the Cloud Function
     env = {
-        'GCP_AGGREGATE_DEST_TABLE': config_values['GCP_AGGREGATE_DEST_TABLE'],
+        'GCP_AGGREGATE_DEST_TABLE': config['GCP_AGGREGATE_DEST_TABLE'],
     }
     fxn = gcp.cloudfunctions.Function(
         f'{name}-billing-function',
@@ -199,13 +254,13 @@ def create_cloud_function(
         event_trigger=trigger,
         source_archive_bucket=function_bucket.name,
         source_archive_object=source_archive_object.name,
-        project=config_values['PROJECT'],
-        region=config_values['REGION'],
+        project=config['PROJECT'],
+        region=config['REGION'],
         build_environment_variables=env,
         environment_variables=env,
         service_account_email=service_account,
-        available_memory_mb=config_values['MEMORY'],
-        timeout=config_values['TIMEOUT'],
+        available_memory_mb=config['MEMORY'],
+        timeout=config['TIMEOUT'],
         opts=pulumi.ResourceOptions(
             depends_on=[
                 pubsub_topic,
@@ -219,12 +274,119 @@ def create_cloud_function(
     # Slack notifications
     filter_string = fxn.name.apply(
         lambda fxn_name: f"""
-            resource.type="cloud_function"
-            AND resource.labels.function_name="{fxn_name}"
+            resource.type='cloud_function'
+            AND resource.labels.function_name='{fxn_name}'
             AND severity >= WARNING
         """
     )
 
+    alert_policy = create_alert_policy(
+        name, fxn, 'function', filter_string, slack_channel
+    )
+
+    return fxn, trigger, alert_policy
+
+
+def create_cloudrun_job(
+    name: str = '',
+    config: dict = None,
+    service_account: str = None,
+    pubsub_topic: gcp.pubsub.Topic = None,
+    cloudrun_service: gcp.projects.Service = None,
+    slack_channel: gcp.monitoring.NotificationChannel = None,
+    prebuilt_images: dict[str, docker.Image] = None,
+):
+    """
+    Create a single Cloud Run Job. Include the pubsub trigger and event alerts
+    """
+
+    # Get prebuilt image, or build the new one
+    image_name = config['DOCKERIMAGE']
+    image: docker.Image = None
+    if image_name in prebuilt_images.keys():
+        image = prebuilt_images[image_name]
+    else:
+        image = setup_docker_image(
+            config['DOCKERIMAGE'], config['DOCKERFILE'], config['PROJECT']
+        )
+
+    # Create the Cloud Function
+    envs = [
+        {
+            'name': 'GCP_AGGREGATE_DEST_TABLE',
+            'value': config['GCP_AGGREGATE_DEST_TABLE'],
+        }
+    ]
+
+    fxn = gcp.cloudrun.Service(
+        f'{name}-billing-cloudrun',
+        location=config['REGION'],
+        template=gcp.cloudrun.ServiceTemplateArgs(
+            spec=gcp.cloudrun.ServiceTemplateSpecArgs(
+                containers=[
+                    gcp.cloudrun.ServiceTemplateSpecContainerArgs(
+                        image=image.image_name.apply(lambda x: x),
+                        envs=envs,
+                    )
+                ],
+                timeout_seconds=config['TIMEOUT'],
+                service_account_name=service_account,
+            ),
+        ),
+        opts=pulumi.ResourceOptions(depends_on=[image, pubsub_topic, cloudrun_service]),
+    )
+
+    # Make this service account an invoker
+    gcp.cloudrun.IamMember(
+        f'{name}-cloudrun-iam-member',
+        location=fxn.location,
+        project=fxn.project,
+        service=fxn.name,
+        role='roles/run.invoker',
+        member=f'serviceAccount:{service_account}',
+    )
+
+    # Create a subscription to trigger this cloudrun job
+    # The function name to run is in the attributes
+    subscription = gcp.pubsub.Subscription(
+        f'billing-aggregate-{name}-cloudrun-subscription',
+        topic=pubsub_topic.name,
+        push_config=gcp.pubsub.SubscriptionPushConfigArgs(
+            push_endpoint=fxn.statuses[0].url,
+            attributes={
+                'x-goog-version': 'v1',
+                'function': name,
+            },
+            oidc_token=gcp.pubsub.SubscriptionPushConfigOidcTokenArgs(
+                service_account_email=service_account,
+            ),
+        ),
+        opts=pulumi.ResourceOptions(depends_on=[fxn, pubsub_topic]),
+    )
+
+    # Slack notifications
+    filter_string = fxn.name.apply(
+        lambda fxn_name: f"""
+            resource.type='cloud_run_job'
+            AND resource.labels.job_name='{fxn_name}'
+            AND severity >= WARNING
+        """
+    )
+
+    alert_policy = create_alert_policy(
+        name, fxn, 'cloudrun', filter_string, slack_channel
+    )
+
+    return fxn, image, subscription, alert_policy
+
+
+def create_alert_policy(
+    name,
+    fxn,
+    run_type: str = '',
+    filter_string: str = '',
+    slack_channel: gcp.monitoring.NotificationChannel = None,
+):
     # Create the Cloud Function's event alert
     alert_condition = gcp.monitoring.AlertPolicyConditionArgs(
         condition_matched_log=(
@@ -242,17 +404,16 @@ def create_cloud_function(
         ),
     )
     alert_policy = gcp.monitoring.AlertPolicy(
-        f'{name}-billing-function-error-alert',
-        display_name=f'{name.capitalize()} Billing Function Error Alert',
+        f'{name}-billing-{run_type}-error-alert',
+        display_name=f'{name.capitalize()} Billing Cloud Run Error Alert',
         combiner='OR',
         notification_channels=[slack_channel],
         conditions=[alert_condition],
         alert_strategy=alert_rate,
         opts=pulumi.ResourceOptions(depends_on=[fxn]),
     )
-    alert_policy = None
 
-    return fxn, trigger, alert_policy
+    return alert_policy
 
 
 def archive_folder(path: str) -> pulumi.AssetArchive:
@@ -270,4 +431,13 @@ def archive_folder(path: str) -> pulumi.AssetArchive:
 
 
 if __name__ == '__main__':
+    if os.getenv('DEBUG'):
+        import debugpy
+
+        debugpy.listen(('localhost', 5678))
+        print('debugpy is listening, attach by pressing F5 or ►')
+
+        debugpy.wait_for_client()
+        print('Attached to debugpy!')
+
     main()

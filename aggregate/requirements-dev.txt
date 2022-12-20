@@ -7,3 +7,4 @@ debugpy==1.6.0
 pytest==7.1.2
 pulumi==3.33.2
 pulumi-gcp==6.21.0
+pulumi-docker==3.6.1
