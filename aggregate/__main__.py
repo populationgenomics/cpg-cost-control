@@ -123,7 +123,7 @@ def main():
     source_archive_object = gcp.storage.BucketObject(
         bucket_name,
         name=f'{name}-source-archive-{time.time()}',
-        bucket=function_bucket.name,
+        bucket=bucket_name,
         source=archive,
     )
 
@@ -169,7 +169,7 @@ def main():
     for function in functions:
         if config_values.get('TYPE') == 'function':
             # Create the function and it's corresponding pubsub and subscription.
-            fxn, _, _ = create_cloud_function(
+            create_cloud_function(
                 name=function,
                 config=config_values,
                 service_account=config_values['GCP_SERVICE_ACCOUNT'],
@@ -180,7 +180,7 @@ def main():
                 slack_channel=slack_channel,
             )
         else:
-            fxn, image, _, _ = create_cloudrun_job(
+            _, image, full_image_name, _, _ = create_cloudrun_job(
                 name=function,
                 config=config_values,
                 service_account=config_values['GCP_SERVICE_ACCOUNT'],
@@ -189,35 +189,43 @@ def main():
                 slack_channel=slack_channel,
                 prebuilt_images=images,
             )
-            images[config_values['DOCKERIMAGE']] = image
-
-        pulumi.export(f'{function}_fxn_name', fxn.name)
+            images[config_values['DOCKERIMAGE']] = (image, full_image_name)
 
 
 def configure_docker():
-    sp.check_output(['gcloud', 'auth', 'configure-docker'])
+    sp.check_output(['gcloud', 'auth', 'configure-docker'], stderr=sp.DEVNULL)
+
+
+def get_oauth_token():
+    result = sp.check_output(['gcloud', 'auth', 'print-identity-token'])
+    return result.decode('utf-8')
 
 
 def setup_docker_image(name, dockerfile, project):
     # Get dockerfile folder
     path = os.path.dirname(os.path.abspath(dockerfile))
 
+    image_name = f'gcr.io/{project}/{name}'
+
     # Dockerfile is assumed to be in the root folder of the build context
     image = docker.Image(
         name,
+        image_name=image_name,
         build=docker.DockerBuild(
             context=path,
             extra_options=[
-                '--quiet'  # see https://github.com/pulumi/pulumi-docker/issues/289
+                '--platform',
+                'linux/amd64',  # enforce linux in case building on apple silicon
+                '--quiet',  # see https://github.com/pulumi/pulumi-docker/issues/289
             ],
         ),
-        image_name=f'gcr.io/{project}/{name}:latest',
+        skip_push=False,
     )
 
     pulumi.export('base_image_name', image.base_image_name)
     pulumi.export('full_image_name', image.image_name)
 
-    return image
+    return image, image_name
 
 
 def b64encode_str(s: str) -> str:
@@ -249,7 +257,7 @@ def create_cloud_function(
     }
     fxn = gcp.cloudfunctions.Function(
         f'{name}-billing-function',
-        entry_point=f'{name}',
+        entry_point=name,
         runtime='python310',
         event_trigger=trigger,
         source_archive_bucket=function_bucket.name,
@@ -284,6 +292,8 @@ def create_cloud_function(
         name, fxn, 'function', filter_string, slack_channel
     )
 
+    pulumi.export(f'{name}_function_name', fxn.name)
+
     return fxn, trigger, alert_policy
 
 
@@ -304,9 +314,9 @@ def create_cloudrun_job(
     image_name = config['DOCKERIMAGE']
     image: docker.Image = None
     if image_name in prebuilt_images.keys():
-        image = prebuilt_images[image_name]
+        image, full_image_name = prebuilt_images[image_name]
     else:
-        image = setup_docker_image(
+        image, full_image_name = setup_docker_image(
             config['DOCKERIMAGE'], config['DOCKERFILE'], config['PROJECT']
         )
 
@@ -318,17 +328,17 @@ def create_cloudrun_job(
         }
     ]
 
+    container = gcp.cloudrun.ServiceTemplateSpecContainerArgs(
+        image=full_image_name,
+        envs=envs,
+    )
+
     fxn = gcp.cloudrun.Service(
         f'{name}-billing-cloudrun',
         location=config['REGION'],
         template=gcp.cloudrun.ServiceTemplateArgs(
             spec=gcp.cloudrun.ServiceTemplateSpecArgs(
-                containers=[
-                    gcp.cloudrun.ServiceTemplateSpecContainerArgs(
-                        image=image.image_name.apply(lambda x: x),
-                        envs=envs,
-                    )
-                ],
+                containers=[container],
                 timeout_seconds=config['TIMEOUT'],
                 service_account_name=service_account,
             ),
@@ -377,7 +387,9 @@ def create_cloudrun_job(
         name, fxn, 'cloudrun', filter_string, slack_channel
     )
 
-    return fxn, image, subscription, alert_policy
+    pulumi.export(f'{name}_cloudrun_name', fxn.name)
+
+    return fxn, image, full_image_name, subscription, alert_policy
 
 
 def create_alert_policy(
