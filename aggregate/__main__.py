@@ -51,8 +51,8 @@ import pulumi_docker as docker
 
 # File path to where the Cloud Function's source code is located.
 PATH_TO_SOURCE_CODE = './'
-DOCKER_REGISTRY = 'billing-docker-registry'
 DOCKER_IMAGE = 'billing-aggregate-image'
+DOCKER_IMAGE_REGISTRY = 'australia-southeast1-docker.pkg.dev/cpg-common/images'
 GCP_SERVICE_ACCOUNT = 'billing-admin-290403@appspot.gserviceaccount.com	'
 
 
@@ -133,6 +133,9 @@ def main():
 
     # Create one pubsub to be triggered by the cloud scheduler
     pubsub = gcp.pubsub.Topic(f'{name}-topic', project=config_values['PROJECT'])
+    pubsub_dead_letters = gcp.pubsub.Topic(
+        f'{name}-dead-letters', project=config_values['PROJECT']
+    )
 
     # Create a cron job to run the function every day at midnight.
     job = gcp.cloudscheduler.Job(
@@ -174,6 +177,7 @@ def main():
                 config=config_values,
                 service_account=config_values['GCP_SERVICE_ACCOUNT'],
                 pubsub_topic=pubsub,
+                pubsub_dead_topic=pubsub_dead_letters,
                 cloud_service=cloud_service,
                 function_bucket=function_bucket,
                 source_archive_object=source_archive_object,
@@ -185,6 +189,7 @@ def main():
                 config=config_values,
                 service_account=config_values['GCP_SERVICE_ACCOUNT'],
                 pubsub_topic=pubsub,
+                pubsub_dead_topic=pubsub_dead_letters,
                 cloudrun_service=cloudrun_service,
                 slack_channel=slack_channel,
                 prebuilt_images=images,
@@ -193,19 +198,16 @@ def main():
 
 
 def configure_docker():
-    sp.check_output(['gcloud', 'auth', 'configure-docker'], stderr=sp.DEVNULL)
-
-
-def get_oauth_token():
-    result = sp.check_output(['gcloud', 'auth', 'print-identity-token'])
-    return result.decode('utf-8')
+    sp.check_output(
+        ['gcloud', 'auth', 'configure-docker', DOCKER_IMAGE_REGISTRY], stderr=sp.DEVNULL
+    )
 
 
 def setup_docker_image(name, dockerfile, project):
     # Get dockerfile folder
     path = os.path.dirname(os.path.abspath(dockerfile))
 
-    image_name = f'gcr.io/{project}/{name}'
+    image_name = f'{DOCKER_IMAGE_REGISTRY}/{project}/{name}'
 
     # Dockerfile is assumed to be in the root folder of the build context
     image = docker.Image(
@@ -228,6 +230,18 @@ def setup_docker_image(name, dockerfile, project):
     return image, image_name
 
 
+def get_image(config: dict, prebuilt_images: dict[str, docker.Image]):
+    image_name = config['DOCKERIMAGE']
+    image: docker.Image = None
+    if image_name in prebuilt_images.keys():
+        image, full_image_name = prebuilt_images[image_name]
+    else:
+        image, full_image_name = setup_docker_image(
+            config['DOCKERIMAGE'], config['DOCKERFILE'], config['PROJECT']
+        )
+    return image, full_image_name
+
+
 def b64encode_str(s: str) -> str:
     return b64encode(s.encode('utf-8')).decode('utf-8')
 
@@ -237,6 +251,7 @@ def create_cloud_function(
     config: dict = None,
     service_account: str = None,
     pubsub_topic: gcp.pubsub.Topic = None,
+    pubsub_dead_topic: gcp.pubsub.Topic = None,
     function_bucket: gcp.storage.Bucket = None,
     cloud_service: gcp.projects.Service = None,
     source_archive_object: gcp.storage.BucketObject = None,
@@ -302,6 +317,7 @@ def create_cloudrun_job(
     config: dict = None,
     service_account: str = None,
     pubsub_topic: gcp.pubsub.Topic = None,
+    pubsub_dead_topic: gcp.pubsub.Topic = None,
     cloudrun_service: gcp.projects.Service = None,
     slack_channel: gcp.monitoring.NotificationChannel = None,
     prebuilt_images: dict[str, docker.Image] = None,
@@ -311,14 +327,7 @@ def create_cloudrun_job(
     """
 
     # Get prebuilt image, or build the new one
-    image_name = config['DOCKERIMAGE']
-    image: docker.Image = None
-    if image_name in prebuilt_images.keys():
-        image, full_image_name = prebuilt_images[image_name]
-    else:
-        image, full_image_name = setup_docker_image(
-            config['DOCKERIMAGE'], config['DOCKERFILE'], config['PROJECT']
-        )
+    image, full_image_name = get_image(config, prebuilt_images)
 
     # Create the Cloud Function
     envs = [
@@ -370,6 +379,9 @@ def create_cloudrun_job(
             oidc_token=gcp.pubsub.SubscriptionPushConfigOidcTokenArgs(
                 service_account_email=service_account,
             ),
+        ),
+        dead_letter_policy=gcp.pubsub.SubscriptionDeadLetterPolicyArgs(
+            dead_letter_topic=pubsub_dead_topic.name, max_delivery_attempts=5
         ),
         opts=pulumi.ResourceOptions(depends_on=[fxn, pubsub_topic]),
     )

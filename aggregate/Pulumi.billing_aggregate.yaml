@@ -8,7 +8,7 @@ config:
     - gcp
     - hail
     - seqr
-  opts:memory: 8192
+  opts:memory: 4096
   opts:timeout: 3600
   opts:cron: '0 8 * * *' # Run at 8am every day
   opts:slack_channel: '#software-alerts'

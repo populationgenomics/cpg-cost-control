@@ -1,4 +1,4 @@
-# Billing Cloud Functions
+# Billing Cloud Run Jobs
 
 ## Setup and running locally
 
@@ -32,9 +32,9 @@ python local.py
 ```
 
 
-## Cloud Functions
+## Cloud Run Job
 
-To run the cloud functions on gcp simply use the following command:
+To run the cloud run job on gcp simply use the following command:
 
 ```shell
  gcloud functions call seqr-billing-function-99f2d95 \
