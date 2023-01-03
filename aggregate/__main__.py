@@ -51,7 +51,7 @@ import pulumi_docker as docker
 
 # File path to where the Cloud Function's source code is located.
 PATH_TO_SOURCE_CODE = './'
-DOCKER_IMAGE = 'billing-aggregate-image'
+DOCKER_IMAGE = 'billing-aggregate'
 DOCKER_IMAGE_REGISTRY = 'australia-southeast1-docker.pkg.dev/cpg-common/images'
 GCP_SERVICE_ACCOUNT = 'billing-admin-290403@appspot.gserviceaccount.com	'
 
@@ -381,7 +381,7 @@ def create_cloudrun_job(
             ),
         ),
         dead_letter_policy=gcp.pubsub.SubscriptionDeadLetterPolicyArgs(
-            dead_letter_topic=pubsub_dead_topic.name, max_delivery_attempts=5
+            dead_letter_topic=pubsub_dead_topic, max_delivery_attempts=5
         ),
         opts=pulumi.ResourceOptions(depends_on=[fxn, pubsub_topic]),
     )
