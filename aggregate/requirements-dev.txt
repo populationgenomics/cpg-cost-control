@@ -5,6 +5,6 @@ pre-commit==2.19.0
 pylint==2.13.9
 debugpy==1.6.0
 pytest==7.1.2
-pulumi==3.33.2
-pulumi-gcp==6.45.0
+pulumi==3.51.1
+pulumi-gcp==6.46.0
 pulumi-docker==3.6.1

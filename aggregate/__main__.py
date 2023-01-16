@@ -51,6 +51,7 @@ import pulumi_docker as docker
 
 # File path to where the Cloud Function's source code is located.
 PATH_TO_SOURCE_CODE = './'
+BIGQUERY_DEADLETTERS_TABLE = 'billing-aggregate-deadletters'
 DOCKER_IMAGE = 'billing-aggregate'
 DOCKER_IMAGE_REGISTRY = 'australia-southeast1-docker.pkg.dev/cpg-common/images'
 GCP_SERVICE_ACCOUNT = 'billing-admin-290403@appspot.gserviceaccount.com	'
@@ -65,7 +66,7 @@ def main():
     opts = pulumi.Config(name='opts')
     bq_opts = pulumi.Config(name='bq')
 
-    config_values = {
+    config = {
         'NAME': opts.get('name'),
         'TYPE': opts.get('type'),
         'DOCKERFILE': opts.get('dockerfile'),
@@ -83,8 +84,8 @@ def main():
     }
 
     # Set environment variable to the correct project
-    name = config_values['NAME']
-    bucket_name = f"{name}-{config_values['PROJECT']}"
+    name = config['NAME']
+    bucket_name = f"{name}-{config['PROJECT']}"
 
     # Configure docker properly. Only needs to be run once, but is essential
     configure_docker()
@@ -106,8 +107,8 @@ def main():
     function_bucket = gcp.storage.Bucket(
         bucket_name,
         name=bucket_name,
-        location=config_values['REGION'],
-        project=config_values['PROJECT'],
+        location=config['REGION'],
+        project=config['PROJECT'],
         uniform_bucket_level_access=True,
     )
 
@@ -129,13 +130,13 @@ def main():
 
     # Create the Cloud Function, deploying the source we just uploaded to Google
     # Cloud Storage.
-    functions = ast.literal_eval(config_values['FUNCTIONS'])
+    functions = ast.literal_eval(config['FUNCTIONS'])
 
     # Create one pubsub to be triggered by the cloud scheduler
-    pubsub = gcp.pubsub.Topic(f'{name}-topic', project=config_values['PROJECT'])
-    pubsub_dead_letters = gcp.pubsub.Topic(
-        f'{name}-dead-letters', project=config_values['PROJECT']
-    )
+    pubsub = gcp.pubsub.Topic(f'{name}-topic', project=config['PROJECT'])
+
+    # Dead lettering setup
+    pubsub_dead_letters = dead_letters(name, config)
 
     # Create a cron job to run the function every day at midnight.
     job = gcp.cloudscheduler.Job(
@@ -144,9 +145,9 @@ def main():
             topic_name=pubsub.id,
             data=b64encode_str('Run the functions'),
         ),
-        schedule=config_values['CRON'],
-        project=config_values['PROJECT'],
-        region=config_values['REGION'],
+        schedule=config['CRON'],
+        project=config['PROJECT'],
+        region=config['REGION'],
         time_zone='Australia/Sydney',
         opts=pulumi.ResourceOptions(depends_on=[pubsub]),
     )
@@ -161,21 +162,21 @@ def main():
         display_name=f'{name.capitalize()} Slack Notification Channel',
         type='slack',
         labels={
-            'auth_token': config_values['SLACK_AUTH_TOKEN'],
-            'channel_name': config_values['SLACK_CHANNEL'],
+            'auth_token': config['SLACK_AUTH_TOKEN'],
+            'channel_name': config['SLACK_CHANNEL'],
         },
         description='Slack notification channel for all gcp cost aggregator functions',
-        project=config_values['PROJECT'],
+        project=config['PROJECT'],
     )
 
     images = {}
     for function in functions:
-        if config_values.get('TYPE') == 'function':
+        if config.get('TYPE') == 'function':
             # Create the function and it's corresponding pubsub and subscription.
             create_cloud_function(
                 name=function,
-                config=config_values,
-                service_account=config_values['GCP_SERVICE_ACCOUNT'],
+                config=config,
+                service_account=config['GCP_SERVICE_ACCOUNT'],
                 pubsub_topic=pubsub,
                 pubsub_dead_topic=pubsub_dead_letters,
                 cloud_service=cloud_service,
@@ -186,15 +187,104 @@ def main():
         else:
             _, image, full_image_name, _, _ = create_cloudrun_job(
                 name=function,
-                config=config_values,
-                service_account=config_values['GCP_SERVICE_ACCOUNT'],
+                config=config,
+                service_account=config['GCP_SERVICE_ACCOUNT'],
                 pubsub_topic=pubsub,
                 pubsub_dead_topic=pubsub_dead_letters,
                 cloudrun_service=cloudrun_service,
                 slack_channel=slack_channel,
                 prebuilt_images=images,
             )
-            images[config_values['DOCKERIMAGE']] = (image, full_image_name)
+            images[config['DOCKERIMAGE']] = (image, full_image_name)
+
+
+def dead_letters(name: str, config: dict) -> gcp.pubsub.Topic:
+    project_name, dataset_id, table = config['GCP_AGGREGATE_DEST_TABLE'].rsplit('.', 2)
+
+    projects = gcp.projects.get_project(filter=f'name:{project_name}')
+    project = projects.projects[0]
+
+    # Create dataset for aggregate billing if one not already in bigquery
+    dataset = gcp.bigquery.Dataset(
+        'aggregate-billing-destination-dataset',
+        accesses=[
+            gcp.bigquery.DatasetAccessArgs(
+                role='READER',
+                special_group='projectReaders',
+            ),
+            gcp.bigquery.DatasetAccessArgs(
+                role='WRITER',
+                special_group='projectWriters',
+            ),
+            gcp.bigquery.DatasetAccessArgs(
+                role='OWNER',
+                special_group='projectOwners',
+            ),
+        ],
+        dataset_id=dataset_id,
+        location=config['REGION'],
+        project=project.project_id,
+        opts=pulumi.ResourceOptions(protect=True),
+    )
+
+    # Make sure the sa can view and edit
+    sa = (
+        f'serviceAccount:service-{project.number}@gcp-sa-pubsub.iam.gserviceaccount.com'
+    )
+    viewer = gcp.projects.IAMMember(
+        'viewer',
+        project=project.project_id,
+        role='roles/bigquery.metadataViewer',
+        member=sa,
+    )
+    editor = gcp.projects.IAMMember(
+        'editor',
+        project=project.project_id,
+        role='roles/bigquery.dataEditor',
+        member=sa,
+    )
+
+    # Create table
+    deadletters_table = gcp.bigquery.Table(
+        f'{table}-deadletters-table',
+        project=project.project_id,
+        dataset_id=dataset.dataset_id,
+        table_id=f'{table}_deadletters',
+        schema="""[
+            {
+                "name": "data",
+                "type": "STRING",
+                "mode": "NULLABLE",
+                "description": "The data"
+            }
+        ]""",
+        opts=pulumi.ResourceOptions(depends_on=[dataset]),
+    )
+    table_id = pulumi.Output.all(
+        deadletters_table.project,
+        deadletters_table.dataset_id,
+        deadletters_table.table_id,
+    ).apply(lambda x: f'{x[0]}:{x[1]}.{x[2]}')
+
+    # Create topic and subscription
+    pubsub_dead_letters = gcp.pubsub.Topic(
+        f'{name}-dead-letters', project=project.project_id
+    )
+    gcp.pubsub.Subscription(
+        f'{name}-dead-letters-subscription',
+        topic=pubsub_dead_letters.name,
+        project=project.project_id,
+        bigquery_config=gcp.pubsub.SubscriptionBigqueryConfigArgs(
+            table=table_id,
+            # use_topic_schema=True,
+            # write_metadata=True,
+        ),
+        opts=pulumi.ResourceOptions(
+            depends_on=[pubsub_dead_letters, deadletters_table, viewer, editor]
+        ),
+    )
+
+    return pubsub_dead_letters
 
 
 def configure_docker():
@@ -382,7 +472,9 @@ def create_cloudrun_job(
         ),
         dead_letter_policy=gcp.pubsub.SubscriptionDeadLetterPolicyArgs(
             dead_letter_topic=pubsub_dead_topic, max_delivery_attempts=5
-        ),
+        )
+        if pubsub_dead_topic
+        else None,
         opts=pulumi.ResourceOptions(depends_on=[fxn, pubsub_topic]),
     )
 
