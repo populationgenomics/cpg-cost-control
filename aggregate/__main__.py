@@ -276,8 +276,7 @@ def dead_letters(name: str, config: dict) -> gcp.pubsub.Topic:
         project=project.project_id,
         bigquery_config=gcp.pubsub.SubscriptionBigqueryConfigArgs(
             table=table_id,
-            # use_topic_schema=True,
-            # write_metadata=True,
+            use_topic_schema=True,
         ),
         opts=pulumi.ResourceOptions(
             depends_on=[pubsub_dead_letters, deadletters_table, viewer, editor]
