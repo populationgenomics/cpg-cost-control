@@ -178,12 +178,20 @@ def get_total_hail_cost(currency_conversion_rate, batch_resource, usage):
     )
 
 
+def get_schema_json(file: str) -> dict[str, any]:
+    """Get a schema (in JSON) from the schema directory"""
+    pwd = Path(__file__).parent.parent.resolve()
+    schema_path = pwd / 'schema' / file
+    try:
+        with open(schema_path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception as exp:
+        raise exp
+
+
 def get_bq_schema_json() -> dict[str, any]:
     """Get the bq schema (in JSON) for the aggregate table"""
-    pwd = Path(__file__).parent.parent.resolve()
-    schema_path = pwd / 'schema' / 'aggregate_schema.json'
-    with open(schema_path, 'r', encoding='utf-8') as f:
-        return json.load(f)
+    return get_schema_json('aggregate_schema.json')
 
 
 def _format_bq_schema_json(schema: dict[str, Any]):

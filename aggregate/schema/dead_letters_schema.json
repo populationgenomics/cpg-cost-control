@@ -1,0 +1,31 @@
+[
+    {
+        "name": "data",
+        "type": "STRING",
+        "description": "The data"
+    },
+    {
+        "name": "subscription_name",
+        "type": "STRING",
+        "mode": "NULLABLE",
+        "description": "subscription name"
+    },
+    {
+        "name": "message_id",
+        "type": "STRING",
+        "mode": "NULLABLE",
+        "description": "message id"
+    },
+    {
+        "name": "publish_time",
+        "type": "TIMESTAMP",
+        "mode": "NULLABLE",
+        "description": "publish time"
+    },
+    {
+        "name": "attributes",
+        "type": "JSON",
+        "mode": "NULLABLE",
+        "description": "attributes"
+    }
+]

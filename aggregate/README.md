@@ -37,6 +37,6 @@ python local.py
 To run the cloud run job on gcp simply use the following command:
 
 ```shell
- gcloud functions call seqr-billing-function-99f2d95 \
+ gcloud functions call seqr-billing-cloudrun-9ecc5d0 \
     --data '{"start": "2022-12-14 00:00", "end": "2022-12-16 09:00"}'
 ```

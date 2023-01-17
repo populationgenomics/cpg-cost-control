@@ -27,6 +27,7 @@ Creates the following:
 
 import os
 import ast
+import json
 import time
 import subprocess as sp
 from base64 import b64encode
@@ -35,19 +36,7 @@ import pulumi
 import pulumi_gcp as gcp
 import pulumi_docker as docker
 
-
-# NOTE: Uncomment the below code when launching pulumi locally
-# after running `pulumi up` or an equivalent command, then hit F5 to connect the
-# vscode debugger. Helpful for finding hidden pulumi errors
-
-# import debugpy
-
-# debugpy.listen(('0.0.0.0', 5678))
-# print('debugpy is listening, attach by pressing F5 or ►')
-
-# debugpy.wait_for_client()
-# print('Attached to debugpy!')
-
+from billing_functions import utils
 
 # File path to where the Cloud Function's source code is located.
 PATH_TO_SOURCE_CODE = './'
@@ -62,39 +51,7 @@ GCP_SERVICE_ACCOUNT = 'billing-admin-290403@appspot.gserviceaccount.com'
 ACK_DEADLINE = 600
 SUBSCRIPTION_EXPIRY = gcp.pubsub.SubscriptionExpirationPolicyArgs(ttl='')
 
-DEAD_LETTERS_SCHEMA = """
-[
-    {
-        "name": "data",
-        "type": "STRING",
-        "description": "The data"
-    },
-    {
-        "name": "subscription_name",
-        "type": "STRING",
-        "mode": "NULLABLE",
-        "description": "subscription name"
-    },
-    {
-        "name": "message_id",
-        "type": "STRING",
-        "mode": "NULLABLE",
-        "description": "message id"
-    },
-    {
-        "name": "publish_time",
-        "type": "TIMESTAMP",
-        "mode": "NULLABLE",
-        "description": "publish time"
-    },
-    {
-        "name": "attributes",
-        "type": "JSON",
-        "mode": "NULLABLE",
-        "description": "attributes"
-    }
-]
-"""
+DEAD_LETTERS_SCHEMA = json.dumps(utils.get_schema_json('dead_letters_schema.json'))
 
 
 def main():
@@ -182,7 +139,7 @@ def main():
     job = gcp.cloudscheduler.Job(
         f'{name}-job',
         pubsub_target=gcp.cloudscheduler.JobPubsubTargetArgs(
-            topic_name=pubsub.id,
+            topic_name=pubsub.id, data=b64encode_str('Run aggregate functions')
         ),
         schedule=config['CRON'],
         project=config['PROJECT'],
@@ -288,6 +245,12 @@ def dead_letters(name: str, config: dict) -> gcp.pubsub.Topic:
         role='roles/pubsub.publisher',
         member=sa,
     )
+    subscriber = gcp.projects.IAMMember(
+        'subscriber',
+        project=project.project_id,
+        role='roles/pubsub.subscriber',
+        member=sa,
+    )
 
     # Create table
     deadletters_table = gcp.bigquery.Table(
@@ -326,6 +289,7 @@ def dead_letters(name: str, config: dict) -> gcp.pubsub.Topic:
                 viewer,
                 editor,
                 publisher,
+                subscriber,
             ]
         ),
     )
