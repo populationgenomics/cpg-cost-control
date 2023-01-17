@@ -54,7 +54,47 @@ PATH_TO_SOURCE_CODE = './'
 BIGQUERY_DEADLETTERS_TABLE = 'billing-aggregate-deadletters'
 DOCKER_IMAGE = 'billing-aggregate'
 DOCKER_IMAGE_REGISTRY = 'australia-southeast1-docker.pkg.dev/cpg-common/images'
-GCP_SERVICE_ACCOUNT = 'billing-admin-290403@appspot.gserviceaccount.com	'
+GCP_SERVICE_ACCOUNT = 'billing-admin-290403@appspot.gserviceaccount.com'
+
+# See docs regarding expiration policy and ack deadline:
+# https://cloud.google.com/run/docs/triggering/pubsub-push#ack-deadline
+# https://www.pulumi.com/registry/packages/gcp/api-docs/pubsub/subscription/#inputs
+ACK_DEADLINE = 600
+SUBSCRIPTION_EXPIRY = gcp.pubsub.SubscriptionExpirationPolicyArgs(ttl='')
+
+DEAD_LETTERS_SCHEMA = """
+[
+    {
+        "name": "data",
+        "type": "STRING",
+        "description": "The data"
+    },
+    {
+        "name": "subscription_name",
+        "type": "STRING",
+        "mode": "NULLABLE",
+        "description": "subscription name"
+    },
+    {
+        "name": "message_id",
+        "type": "STRING",
+        "mode": "NULLABLE",
+        "description": "message id"
+    },
+    {
+        "name": "publish_time",
+        "type": "TIMESTAMP",
+        "mode": "NULLABLE",
+        "description": "publish time"
+    },
+    {
+        "name": "attributes",
+        "type": "JSON",
+        "mode": "NULLABLE",
+        "description": "attributes"
+    }
+]
+"""
 
 
 def main():
@@ -143,7 +183,6 @@ def main():
         f'{name}-job',
         pubsub_target=gcp.cloudscheduler.JobPubsubTargetArgs(
             topic_name=pubsub.id,
-            data=b64encode_str('Run the functions'),
         ),
         schedule=config['CRON'],
         project=config['PROJECT'],
@@ -243,6 +282,12 @@ def dead_letters(name: str, config: dict) -> gcp.pubsub.Topic:
         role='roles/bigquery.dataEditor',
         member=sa,
     )
+    publisher = gcp.projects.IAMMember(
+        'publisher',
+        project=project.project_id,
+        role='roles/pubsub.publisher',
+        member=sa,
+    )
 
     # Create table
     deadletters_table = gcp.bigquery.Table(
@@ -250,14 +295,7 @@ def dead_letters(name: str, config: dict) -> gcp.pubsub.Topic:
         project=project.project_id,
         dataset_id=dataset.dataset_id,
         table_id=f'{table}_deadletters',
-        schema="""[
-            {
-                "name": "data",
-                "type": "STRING",
-                "mode": "NULLABLE",
-                "description": "The data"
-            }
-        ]""",
+        schema=DEAD_LETTERS_SCHEMA,
         opts=pulumi.ResourceOptions(depends_on=[dataset]),
     )
     table_id = pulumi.Output.all(
@@ -270,16 +308,25 @@ def dead_letters(name: str, config: dict) -> gcp.pubsub.Topic:
     pubsub_dead_letters = gcp.pubsub.Topic(
         f'{name}-dead-letters', project=project.project_id
     )
+
     gcp.pubsub.Subscription(
         f'{name}-dead-letters-subscription',
         topic=pubsub_dead_letters.name,
         project=project.project_id,
+        expiration_policy=SUBSCRIPTION_EXPIRY,
         bigquery_config=gcp.pubsub.SubscriptionBigqueryConfigArgs(
             table=table_id,
             use_topic_schema=True,
+            write_metadata=True,
         ),
         opts=pulumi.ResourceOptions(
-            depends_on=[pubsub_dead_letters, deadletters_table, viewer, editor]
+            depends_on=[
+                pubsub_dead_letters,
+                deadletters_table,
+                viewer,
+                editor,
+                publisher,
+            ]
         ),
     )
 
@@ -441,17 +488,29 @@ def create_cloudrun_job(
                 service_account_name=service_account,
             ),
         ),
+        traffics=[
+            gcp.cloudrun.ServiceTrafficArgs(
+                percent=100,
+                latest_revision=True,
+            )
+        ],
         opts=pulumi.ResourceOptions(depends_on=[image, pubsub_topic, cloudrun_service]),
     )
 
     # Make this service account an invoker
     gcp.cloudrun.IamMember(
-        f'{name}-cloudrun-iam-member',
+        f'{name}-cloudrun-iam-member-invoker',
         location=fxn.location,
         project=fxn.project,
         service=fxn.name,
         role='roles/run.invoker',
         member=f'serviceAccount:{service_account}',
+    )
+    gcp.projects.IAMBinding(
+        f'{name}-cloudrun-iam-member-token-creator',
+        project=fxn.project,
+        role='roles/iam.serviceAccountTokenCreator',
+        members=[f'serviceAccount:{service_account}'],
     )
 
     # Create a subscription to trigger this cloudrun job
@@ -459,6 +518,8 @@ def create_cloudrun_job(
     subscription = gcp.pubsub.Subscription(
         f'billing-aggregate-{name}-cloudrun-subscription',
         topic=pubsub_topic.name,
+        ack_deadline_seconds=ACK_DEADLINE,
+        expiration_policy=SUBSCRIPTION_EXPIRY,
         push_config=gcp.pubsub.SubscriptionPushConfigArgs(
             push_endpoint=fxn.statuses[0].url,
             attributes={
