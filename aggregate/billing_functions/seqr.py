@@ -892,6 +892,7 @@ async def main(
     output_path: str = None,
 ):
     """Main body function"""
+    logger.info(f'Running Seqr Billing Aggregation for [{start}, {end}]')
     start, end = utils.process_default_start_and_end(start, end)
 
     seqr_project_map = get_seqr_dataset_id_map()

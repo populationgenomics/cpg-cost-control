@@ -155,7 +155,7 @@ async def main(
     start: datetime = None, end: datetime = None, dry_run: bool = False
 ) -> int:
     """Main body function"""
-
+    logger.info(f'Running Hail Billing Aggregation for [{start}, {end}]')
     start, end = utils.process_default_start_and_end(start, end)
 
     # result = await migrate_hail_data(start, end, hail_token, dry_run=dry_run)

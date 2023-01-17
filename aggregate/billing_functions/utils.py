@@ -23,13 +23,9 @@ import google.cloud.bigquery as bq
 from cpg_utils.cloud import read_secret
 from google.api_core.exceptions import ClientError
 
-
+logging.basicConfig()
 logger = logging.getLogger('cost-aggregate')
 
-handler = logging.StreamHandler(sys.stderr)
-handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s: %(message)s'))
-
-logger.addHandler(handler)
 if os.getenv('DEBUG') in ('1', 'true', 'yes') or os.getenv('DEV') in (
     '1',
     'true',

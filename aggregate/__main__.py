@@ -228,29 +228,36 @@ def dead_letters(name: str, config: dict) -> gcp.pubsub.Topic:
         f'serviceAccount:service-{project.number}@gcp-sa-pubsub.iam.gserviceaccount.com'
     )
     viewer = gcp.projects.IAMMember(
-        'viewer',
+        'dead-letters-sa-bq-viewer',
         project=project.project_id,
         role='roles/bigquery.metadataViewer',
         member=sa,
     )
     editor = gcp.projects.IAMMember(
-        'editor',
+        'dead-letters-sa-bq-editor',
         project=project.project_id,
         role='roles/bigquery.dataEditor',
         member=sa,
     )
     publisher = gcp.projects.IAMMember(
-        'publisher',
+        'dead-letters-sa-publisher',
         project=project.project_id,
         role='roles/pubsub.publisher',
         member=sa,
     )
     subscriber = gcp.projects.IAMMember(
-        'subscriber',
+        'dead-letters-sa-subscriber',
         project=project.project_id,
         role='roles/pubsub.subscriber',
         member=sa,
     )
+    create_token = gcp.projects.IAMMember(
+        'dead-letters-sa-create_token',
+        project=project.project_id,
+        role='roles/iam.serviceAccountTokenCreator',
+        member=sa,
+    )
+    iam = [viewer, editor, publisher, subscriber, create_token]
 
     # Create table
     deadletters_table = gcp.bigquery.Table(
@@ -259,7 +266,7 @@ def dead_letters(name: str, config: dict) -> gcp.pubsub.Topic:
         dataset_id=dataset.dataset_id,
         table_id=f'{table}_deadletters',
         schema=DEAD_LETTERS_SCHEMA,
-        opts=pulumi.ResourceOptions(depends_on=[dataset]),
+        opts=pulumi.ResourceOptions(depends_on=[dataset, *iam]),
     )
     table_id = pulumi.Output.all(
         deadletters_table.project,
@@ -283,14 +290,7 @@ def dead_letters(name: str, config: dict) -> gcp.pubsub.Topic:
             write_metadata=True,
         ),
         opts=pulumi.ResourceOptions(
-            depends_on=[
-                pubsub_dead_letters,
-                deadletters_table,
-                viewer,
-                editor,
-                publisher,
-                subscriber,
-            ]
+            depends_on=[pubsub_dead_letters, deadletters_table, *iam]
         ),
     )
 
@@ -448,8 +448,8 @@ def create_cloudrun_job(
         template=gcp.cloudrun.ServiceTemplateArgs(
             spec=gcp.cloudrun.ServiceTemplateSpecArgs(
                 containers=[container],
-                timeout_seconds=config['TIMEOUT'],
                 service_account_name=service_account,
+                # timeout_seconds=config['TIMEOUT'],
             ),
         ),
         traffics=[
@@ -462,20 +462,39 @@ def create_cloudrun_job(
     )
 
     # Make this service account an invoker
-    gcp.cloudrun.IamMember(
-        f'{name}-cloudrun-iam-member-invoker',
-        location=fxn.location,
+    invoker = gcp.projects.IAMMember(
+        f'{name}-sa-invoker',
         project=fxn.project,
-        service=fxn.name,
         role='roles/run.invoker',
         member=f'serviceAccount:{service_account}',
     )
-    gcp.projects.IAMBinding(
-        f'{name}-cloudrun-iam-member-token-creator',
+    binding = gcp.cloudrun.IamBinding(
+        f'{name}-sa-binding',
         project=fxn.project,
-        role='roles/iam.serviceAccountTokenCreator',
+        location=fxn.location,
+        service=fxn.name,
+        role='roles/run.invoker',
         members=[f'serviceAccount:{service_account}'],
     )
+    project_token_creator = gcp.projects.IAMMember(
+        f'{name}-sa-project_token_creator',
+        project=fxn.project,
+        role='roles/iam.serviceAccountTokenCreator',
+        member=f'serviceAccount:{service_account}',
+    )
+    subscriber = gcp.projects.IAMMember(
+        f'{name}-sa-subscriber',
+        project=fxn.project,
+        role='roles/pubsub.subscriber',
+        member=f'serviceAccount:{service_account}',
+    )
+    publisher = gcp.projects.IAMMember(
+        f'{name}-sa-publisher',
+        project=fxn.project,
+        role='roles/pubsub.publisher',
+        member=f'serviceAccount:{service_account}',
+    )
+    iam = [invoker, binding, project_token_creator, subscriber, publisher]
 
     # Create a subscription to trigger this cloudrun job
     # The function name to run is in the attributes
@@ -499,7 +518,7 @@ def create_cloudrun_job(
         )
         if pubsub_dead_topic
         else None,
-        opts=pulumi.ResourceOptions(depends_on=[fxn, pubsub_topic]),
+        opts=pulumi.ResourceOptions(depends_on=[fxn, pubsub_topic, *iam]),
     )
 
     # Slack notifications

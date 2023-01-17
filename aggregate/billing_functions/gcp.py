@@ -163,6 +163,7 @@ def get_dataset_to_topic_map() -> Dict[str, str]:
 
 async def main(start: datetime = None, end: datetime = None) -> int:
     """Main body function"""
+    logger.info(f'Running GCP Billing Aggregation for [{start}, {end}]')
     interval_iterator = utils.get_date_intervals_for(start, end)
 
     # Storing topic map means we don't repeatedly call to access the topic

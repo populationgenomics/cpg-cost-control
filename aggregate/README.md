@@ -34,9 +34,15 @@ python local.py
 
 ## Cloud Run Job
 
-To run the cloud run job on gcp simply use the following command:
+To run the cloud function on gcp simply use the following command:
 
 ```shell
  gcloud functions call seqr-billing-cloudrun-9ecc5d0 \
     --data '{"start": "2022-12-14 00:00", "end": "2022-12-16 09:00"}'
+```
+
+Alternatively, trigger the topic with a message using the following:
+
+```shell
+  gcloud pubsub topics publish aggregate-billing-topic-9c00d84 --message "hello"
 ```
