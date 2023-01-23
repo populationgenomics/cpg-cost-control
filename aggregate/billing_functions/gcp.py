@@ -44,6 +44,7 @@ except ImportError:
 
 logger = utils.logger
 logger = logger.getChild('gcp')
+logger.propagate = False
 
 
 ##########################

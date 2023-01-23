@@ -4,8 +4,9 @@ cpg-utils==4.6.2
 db-dtypes==1.0.0
 Flask==2.1.2
 google-api-python-client==2.10.0
-google-cloud-secret-manager==2.12.4
 google-cloud-bigquery==3.0.1
+google-cloud-secret-manager==2.12.4
+google-cloud-logging==3.4.0
 gunicorn==20.1.0
 pandas==1.4.2
 pandas-gbq==0.17.4

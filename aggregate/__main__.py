@@ -30,6 +30,7 @@ import ast
 import json
 import time
 import subprocess as sp
+from typing import Tuple
 from base64 import b64encode
 
 import pulumi
@@ -41,7 +42,7 @@ from billing_functions import utils
 # File path to where the Cloud Function's source code is located.
 PATH_TO_SOURCE_CODE = './'
 BIGQUERY_DEADLETTERS_TABLE = 'billing-aggregate-deadletters'
-DOCKER_IMAGE = 'billing-aggregate'
+DOCKER_IMAGE = 'billing-aggregate:latest'
 DOCKER_IMAGE_REGISTRY = 'australia-southeast1-docker.pkg.dev/cpg-common/images'
 GCP_SERVICE_ACCOUNT = 'billing-admin-290403@appspot.gserviceaccount.com'
 
@@ -131,6 +132,7 @@ def main():
 
     # Create one pubsub to be triggered by the cloud scheduler
     pubsub = gcp.pubsub.Topic(f'{name}-topic', project=config['PROJECT'])
+    pulumi.export('pubsub_topic_name', pubsub.name)
 
     # Dead lettering setup
     pubsub_dead_letters = dead_letters(name, config)
@@ -330,7 +332,9 @@ def setup_docker_image(name, dockerfile, project):
     return image, image_name
 
 
-def get_image(config: dict, prebuilt_images: dict[str, docker.Image]):
+def get_image(
+    config: dict, prebuilt_images: dict[str, docker.Image]
+) -> Tuple[docker.Image, str]:
     image_name = config['DOCKERIMAGE']
     image: docker.Image = None
     if image_name in prebuilt_images.keys():
@@ -449,16 +453,16 @@ def create_cloudrun_job(
             spec=gcp.cloudrun.ServiceTemplateSpecArgs(
                 containers=[container],
                 service_account_name=service_account,
-                # timeout_seconds=config['TIMEOUT'],
             ),
         ),
         traffics=[
             gcp.cloudrun.ServiceTrafficArgs(
-                percent=100,
-                latest_revision=True,
+                percent=100, latest_revision=True, revision_name=image.image_name
             )
         ],
-        opts=pulumi.ResourceOptions(depends_on=[image, pubsub_topic, cloudrun_service]),
+        opts=pulumi.ResourceOptions(
+            depends_on=[container, pubsub_topic, cloudrun_service]
+        ),
     )
 
     # Make this service account an invoker
@@ -504,7 +508,7 @@ def create_cloudrun_job(
         ack_deadline_seconds=ACK_DEADLINE,
         expiration_policy=SUBSCRIPTION_EXPIRY,
         push_config=gcp.pubsub.SubscriptionPushConfigArgs(
-            push_endpoint=fxn.statuses[0].url,
+            push_endpoint=pulumi.Output.concat(fxn.statuses[0].url, '/pubsub'),
             attributes={
                 'x-goog-version': 'v1',
                 'function': name,

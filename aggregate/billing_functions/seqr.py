@@ -76,6 +76,7 @@ RunMode = Literal['prod', 'local', 'dry-run']
 
 logger = utils.logger
 logger = logger.getChild('seqr')
+logger.propagate = False
 
 papi = ProjectApi()
 sapi = SampleApi()

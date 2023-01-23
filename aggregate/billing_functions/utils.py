@@ -10,7 +10,6 @@ import json
 import asyncio
 import logging
 
-
 from io import StringIO
 from pathlib import Path
 from datetime import date, datetime, timedelta
@@ -18,13 +17,17 @@ from typing import Any, Iterator, Sequence, TypeVar, Iterable
 
 import aiohttp
 import pandas as pd
+import google.cloud.logging
 import google.cloud.bigquery as bq
 
 from cpg_utils.cloud import read_secret
 from google.api_core.exceptions import ClientError
 
 logging.basicConfig()
+client = google.cloud.logging.Client()
+client.setup_logging()
 logger = logging.getLogger('cost-aggregate')
+logger.propagate = False
 
 if os.getenv('DEBUG') in ('1', 'true', 'yes') or os.getenv('DEV') in (
     '1',
@@ -674,8 +677,7 @@ def upsert_aggregated_dataframe_into_bigquery(
         ]
     )
 
-    client = get_bigquery_client()
-    result = client.query(_query, job_config=job_config).result()
+    result = get_bigquery_client().query(_query, job_config=job_config).result()
     existing_ids = set(result.to_dataframe()['id'])
 
     # Filter out any rows that are already in the table

@@ -42,6 +42,7 @@ EXCLUDED_BATCH_PROJECTS = {'hail', 'seqr'}
 
 logger = utils.logger
 logger = logger.getChild('hail')
+logger.propagate = False
 
 
 def get_billing_projects():
