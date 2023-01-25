@@ -1,0 +1,13 @@
+config:
+  opts:name: azure-cost-control
+  opts:billing_group: billing
+  # opts:memory: 1024
+  # opts:timeout: 540
+  # opts:cron: '0 8 * * *' # Run at 8am every day
+  # opts:slack_channel: '#software-alerts'
+
+  azure-native:clientId: 723276ab-ba6d-4721-aa00-c2e6cac8ab17
+  azure-native:clientSecret: tuE8Q~CYXrQjdo4OTc4GiuR0BW~NJcJ2~U2rJaGn
+  azure-native:tenantId: a744336e-0ec4-40f1-891f-6c8ccaf8e267
+  azure-native:subscriptionId: 2a974991-7c24-48c2-871f-5f7969a2b0c0
+  azure-native:location: australiaeast

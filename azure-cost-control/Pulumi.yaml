@@ -1,0 +1,3 @@
+name: azure-cost-control
+description: An Azure web app that uses policies to restrict spending on supplied Azure resource groups
+runtime: python

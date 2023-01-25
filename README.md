@@ -14,13 +14,14 @@ details.
 
 ## Azure Cost Managment
 
-*In Progress*
-Addition of Azure cost management is still underway. Updates to follow.
+*In Progress:* Addition of Azure cost management is still underway. Updates to follow.
 
 ## Aggregate
 
 Hail Batch: *Complete*
+
 GCP: *Complete*
+
 Azure: *To Do*
 
 The aggregate code currently is hosted and running on GCP aggregates our
