@@ -8,6 +8,20 @@ import pulumi
 import pulumi_azure_native as az
 
 
+def get_connection_string(
+    resource_group: az.resources.ResourceGroup, account: az.storage.StorageAccount
+):
+    """Returns the storage account's connection string"""
+    sa_keys = az.storage.list_storage_account_keys_output(
+        account.name, resource_group_name=resource_group.name
+    )
+    return pulumi.Output.all(account.name, sa_keys).apply(
+        lambda x: (
+            f'DefaultEndpointsProtocol=https;AccountName={x};AccountKey={sa_keys[0]}'
+        )
+    )
+
+
 def signed_blob_read_url(
     blob: az.storage.Blob,
     container: az.storage.BlobContainer,

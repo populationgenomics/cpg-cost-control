@@ -135,5 +135,5 @@ dmypy.json
 # Local run file ignore
 aggregate/local.py
 *.pkl
-*.json
 *.pkl.tar.gz
+local.settings.json
