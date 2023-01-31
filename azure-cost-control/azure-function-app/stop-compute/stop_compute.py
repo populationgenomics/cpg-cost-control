@@ -61,9 +61,20 @@ class Policy(Enum):
         return Policy({r.name: r.value for r in Policy}.get(name.upper()))
 
 
+# MAIN CODE #
+
+
 def main(req: func.HttpRequest) -> func.HttpResponse:
     """Handle http request"""
     logging.info('Python HTTP Trigger function processed a request.')
+    logging.info(f'Running with creds {CREDS}')
+
+    if req.method == 'GET':
+        msg = (
+            'Please submit a post request with response body in the form '
+            '{"resource_group_name": <rg_name>, "request": <stop|start>}'
+        )
+        return func.HttpResponse(msg, status_code=200)
 
     request_body = req.get_json()
 

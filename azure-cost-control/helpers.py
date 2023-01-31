@@ -15,11 +15,14 @@ def get_connection_string(
     sa_keys = az.storage.list_storage_account_keys_output(
         account.name, resource_group_name=resource_group.name
     )
-    return pulumi.Output.all(account.name, sa_keys).apply(
+    primay_sa_key = sa_keys.apply(lambda x: x.keys[0])
+    connection_string = pulumi.Output.all(account.name, primay_sa_key.value).apply(
         lambda x: (
-            f'DefaultEndpointsProtocol=https;AccountName={x};AccountKey={sa_keys[0]}'
+            f'DefaultEndpointsProtocol=https;AccountName={x[0]};'
+            f'AccountKey={x[1]};EndpointSuffix=core.windows.net'
         )
     )
+    return connection_string
 
 
 def signed_blob_read_url(
@@ -33,7 +36,7 @@ def signed_blob_read_url(
     start_time = datetime.today() - timedelta(weeks=1 * 52)
     end_time = datetime.today() + timedelta(weeks=5 * 52)
 
-    token = az.storage.list_storage_account_service_sas_output(
+    tokens = az.storage.list_storage_account_service_sas_output(
         account_name=account.name,
         protocols=az.storage.HttpProtocol.HTTPS,
         shared_access_expiry_time=end_time.strftime('%Y-%m-%d'),
@@ -49,8 +52,11 @@ def signed_blob_read_url(
         content_disposition='inline',
         content_encoding='deflate',
     )
+    primary_token = tokens.apply(lambda x: x.service_sas_token)
 
-    return pulumi.Output.all(account.name, container.name, blob.name, token).apply(
+    return pulumi.Output.all(
+        account.name, container.name, blob.name, primary_token
+    ).apply(
         lambda args: (
             f'https://{args[0]}.blob.core.windows.net/{args[1]}/{args[2]}?{args[3]}'
         )
