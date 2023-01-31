@@ -181,7 +181,7 @@ def create_billing_stop(opts: dict, az_opts: dict):
     )
 
     insights_connection = insights.instrumentation_key.apply(
-        lambda key: f'InstrumentKey={key}'
+        lambda key: f'InstrumentationKey={key}'
     )
     sa_connection_url = helpers.get_connection_string(resource_group, storage_account)
     code_blob_url = helpers.signed_blob_read_url(
@@ -200,10 +200,6 @@ def create_billing_stop(opts: dict, az_opts: dict):
             app_settings=[
                 {'name': 'AzureWebJobsStorage', 'value': sa_connection_url},
                 {'name': 'AzureWebJobsFeatureFlags', 'value': 'EnableProxies'},
-                {
-                    'name': 'APPINSIGHTS_INSTRUMENTATIONKEY',
-                    'value': insights.instrumentation_key,
-                },
                 {
                     'name': 'APPLICATIONINSIGHTS_CONNECTION_STRING',
                     'value': insights_connection,
