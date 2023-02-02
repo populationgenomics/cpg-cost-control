@@ -1,5 +1,8 @@
 """
 Azure function code to enable/disable compute in a provided Azure resource group
+
+Takes POST request with body like follow:
+{"resource_group_name": "billing-test", "request": "stop"}
 """
 
 import os
@@ -7,6 +10,7 @@ import logging
 from enum import Enum
 
 import azure.functions as func
+
 from azure.identity import AzureCliCredential
 from azure.mgmt.policyinsights._policy_insights_client import PolicyInsightsClient
 from azure.mgmt.policyinsights.models import QueryOptions
@@ -16,8 +20,6 @@ from azure.mgmt.resource.policy import PolicyClient
 from azure.mgmt.resource.policy.models import (
     Identity,
     PolicyAssignment,
-    # PolicyAssignmentUpdate,
-    # UserAssignedIdentitiesValue,
 )
 
 # Constants
@@ -67,7 +69,6 @@ class Policy(Enum):
 def main(req: func.HttpRequest) -> func.HttpResponse:
     """Handle http request"""
     logging.info('Python HTTP Trigger function processed a request.')
-    logging.info(f'Running with creds {CREDS}')
 
     if req.method == 'GET':
         msg = (
@@ -75,6 +76,8 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             '{"resource_group_name": <rg_name>, "request": <stop|start>}'
         )
         return func.HttpResponse(msg, status_code=200)
+
+    logging.info(f'Running with creds {CREDS}')
 
     request_body = req.get_json()
 

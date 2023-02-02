@@ -17,15 +17,19 @@ Requires:
 - Creates an Azure web app to disable billing once triggered
 """
 
+from datetime import datetime, timedelta
+
 import os
 import pulumi
-import pulumi_azuread as azuread
 import pulumi_azure_native as az
 
 import helpers
 
 FUNCTION_APP_CODE = os.path.abspath('./azure-function-app')
 RETENTION_DAYS = 30
+BUDGET_START_DATE = datetime.today().replace(day=1)
+BUDGET_END_DATE = BUDGET_START_DATE + timedelta(weeks=52)
+BUDGET_TIME_GRAIN = 'Monthly'
 
 
 def main():
@@ -35,12 +39,28 @@ def main():
     """
     opts = pulumi.Config(name='opts')
     az_opts = pulumi.Config(name='azure-native')
-    # create_service_principal(opts, az_opts)
-    create_billing_stop(opts, az_opts)
+
+    # Create billing resource_group
+    billing_rg_name = opts.get('billing_group')
+    resource_group = az.resources.ResourceGroup(
+        f'{billing_rg_name}-resource-group',
+        location=az_opts.get('location'),
+        resource_group_name=billing_rg_name,
+    )
+
+    give_service_principal_roles(resource_group, opts, az_opts)
+    app = create_billing_stop(resource_group, opts, az_opts)
+
+    set_resource_group_budget('billing-test', 0.000001, app, az_opts)
+
+
+def get_url(app: az.web.WebApp, function: str = 'stop-compute'):
+    """Returns the url to the app function"""
+    return app.default_host_name.apply(lambda url: f'https://{url}/api/{function}')
 
 
 def sub_scope(sid: str):
-    """Reutrn subscription scope string"""
+    """Return subscription scope string"""
     return f'/subscriptions/{sid}'
 
 
@@ -61,51 +81,50 @@ def get_role(sub_id: str, role: str):
     return role_scope(sub_id, role_id)
 
 
-def create_service_principal(opts: dict, az_opts: dict):
+def give_service_principal_roles(
+    resource_group: az.resources.ResourceGroup, opts: dict, az_opts: dict
+):
     """Create a service principal"""
     name = opts.get('name')
     sub_id = az_opts.get('subscriptionId')
-    resource_group = az.resources.get_resource_group(opts.get('billing_group'))
 
-    # Create application
-    application = azuread.Application(f'application-{name}')
+    # Get application used as pulumi service principal for Azure
+    application_id = az_opts.get('clientId')
 
     # Assign permissions
     # Reader and policy contributer on subscription
     az.authorization.RoleAssignment(
         f'app-{name}-subscription-reader',
         principal_type='ServicePrincipal',
-        principal_id=application.id,
+        principal_id=application_id,
         role_definition_id=get_role(sub_id, 'reader'),
         scope=f'/subscriptions/{sub_id}',
     )
     az.authorization.RoleAssignment(
         f'app-{name}-subscription-policy-contributer',
         principal_type='ServicePrincipal',
-        principal_id=application.id,
+        principal_id=application_id,
         role_definition_id=get_role(sub_id, 'policy_contributer'),
         scope=f'/subscriptions/{sub_id}',
     )
 
     # Owner on billing resource group
     az.authorization.RoleAssignment(
-        f'app-{name}-{resource_group.name}-owner',
+        f'app-{name}-billing-resource-group-owner',
         principal_type='ServicePrincipal',
-        principal_id=application.id,
+        principal_id=application_id,
         role_definition_id=get_role(sub_id, 'owner'),
         scope=resource_group.id,
     )
 
-    return application
 
-
-def create_billing_stop(opts: dict, az_opts: dict):
+def create_billing_stop(
+    resource_group: az.resources.ResourceGroup, opts: dict, az_opts: dict
+):
     """
     Creates the stop compute policy and the function that given a resource group
     will stop all compute on that resource group
     """
-
-    resource_group = az.resources.get_resource_group(opts.get('billing_group'))
 
     # Create a the policy definitions
     stop_policy_definition = az.authorization.PolicyDefinition(
@@ -140,12 +159,14 @@ def create_billing_stop(opts: dict, az_opts: dict):
     func_name = 'stop-compute'
 
     # Storage account, code container and blob all required to host the code
+    rg_name = opts.get('billing_group')
     storage_account = az.storage.StorageAccount(
-        f'{resource_group.name}-storage-account',
-        account_name='billingstorage2975',
+        f'{rg_name}-storage-account',
+        account_name=f'{rg_name}storage817497',
         resource_group_name=resource_group.name,
         sku=az.storage.SkuArgs(name='Standard_LRS'),
         kind='StorageV2',
+        opts=pulumi.ResourceOptions(depends_on=[resource_group]),
     )
 
     code_container = az.storage.BlobContainer(
@@ -180,6 +201,8 @@ def create_billing_stop(opts: dict, az_opts: dict):
         resource_group_name=resource_group.name,
     )
 
+    deps = [storage_account, code_container, code_blob, plan, insights]
+
     insights_connection = insights.instrumentation_key.apply(
         lambda key: f'InstrumentationKey={key}'
     )
@@ -187,44 +210,118 @@ def create_billing_stop(opts: dict, az_opts: dict):
     code_blob_url = helpers.signed_blob_read_url(
         code_blob, code_container, storage_account, resource_group
     )
-    pulumi.export('sa_connection_string', sa_connection_url)
 
     # Create the WebApp
     # Passes through the policy ids, subscription and location of the billing rg
+    settings = {
+        'AzureWebJobsStorage': sa_connection_url,
+        'AzureWebJobsFeatureFlags': 'EnableProxies',
+        'APPINSIGHTS_INSTRUMENTATIONKEY': insights.instrumentation_key,
+        'APPLICATIONINSIGHTS_CONNECTION_STRING': insights_connection,
+        'ApplicationInsightsAgent_EXTENSION_VERSION': '~2',
+        'FUNCTIONS_EXTENSION_VERSION': '~4',
+        'FUNCTIONS_WORKER_RUNTIME': 'python',
+        'SCM_DO_BUILD_DURING_DEPLOYMENT': True,
+        'WEBSITE_RUN_FROM_PACKAGE': code_blob_url,
+        'LOCATION': az_opts.get('location'),
+        'SUBSCRIPTION_ID': az_opts.get('subscriptionId'),
+        'STOP_POLICY_ID': stop_policy_definition.id,
+        'START_POLICY_ID': start_policy_definition.id,
+    }
+
     app = az.web.WebApp(
         func_name,
         resource_group_name=resource_group.name,
         server_farm_id=plan.id,
         kind='functionapp',
         site_config=az.web.SiteConfigArgs(
-            app_settings=[
-                {'name': 'AzureWebJobsStorage', 'value': sa_connection_url},
-                {'name': 'AzureWebJobsFeatureFlags', 'value': 'EnableProxies'},
-                {
-                    'name': 'APPLICATIONINSIGHTS_CONNECTION_STRING',
-                    'value': insights_connection,
-                },
-                {'name': 'ApplicationInsightsAgent_EXTENSION_VERSION', 'value': '~2'},
-                {'name': 'FUNCTIONS_EXTENSION_VERSION', 'value': '~4'},
-                {'name': 'FUNCTIONS_WORKER_RUNTIME', 'value': 'python'},
-                {'name': 'WEBSITE_RUN_FROM_PACKAGE', 'value': code_blob_url},
-                {'name': 'LOCATION', 'value': az_opts.get('location')},
-                {'name': 'SUBSCRIPTION_ID', 'value': az_opts.get('subscriptionId')},
-                {'name': 'STOP_POLICY_ID', 'value': stop_policy_definition.id},
-                {'name': 'START_POLICY_ID', 'value': start_policy_definition.id},
-            ],
+            app_settings=[{'name': k, 'value': v} for k, v in settings.items()],
             http20_enabled=True,
             python_version='3.9',
             linux_fx_version='Python|3.9',
         ),
-        opts=pulumi.ResourceOptions(depends_on=policies),
+        opts=pulumi.ResourceOptions(depends_on=[*deps, *policies]),
     )
+    url = get_url(app)
 
     pulumi.export('stop_policy_id', stop_policy_definition.id)
     pulumi.export('start_policy_id', start_policy_definition.id)
     pulumi.export('function_app', app.name)
-    pulumi.export(
-        'endpoint', app.default_host_name.apply(lambda url: f'https://{url}/')
+    pulumi.export('url', url)
+
+    return app
+
+
+def set_resource_group_budget(
+    resource_group_name: str,
+    amount: float,
+    stop_compute_app: az.web.WebApp,
+    az_opts: dict,
+):
+    """Creates the budget, and the alerting system to trigger stop-compute"""
+
+    # Create the resource group
+    resource_group = az.resources.ResourceGroup(
+        f'{resource_group_name}-resource-group',
+        location=az_opts.get('location'),
+        resource_group_name=resource_group_name,
+    )
+
+    # Create action group for this resource group
+    # australiaeast not valid
+    # The provided location 'australiaeast' is not available for resource type
+    # 'microsoft.insights/actiongroups'.
+    # List of available regions for the resource type is
+    # 'global,swedencentral,germanywestcentral,northcentralus,southcentralus'."
+    action_group = az.insights.ActionGroup(
+        f'{resource_group_name}-action-group',
+        action_group_name=f'{resource_group_name}-action-group',
+        group_short_name=f'budget-ctrl',
+        resource_group_name=resource_group.name,
+        azure_function_receivers=[
+            {
+                'functionAppResourceId': stop_compute_app.id,
+                'functionName': stop_compute_app.name,
+                'httpTriggerUrl': get_url(stop_compute_app),
+                'name': stop_compute_app.name,
+                'useCommonAlertSchema': True,
+            }
+        ],
+        email_receivers=[
+            {
+                'emailAddress': 'sabrina.yan@populationgenomics.org.au',
+                'name': 'Sabrina Yan\'s email',
+                'useCommonAlertSchema': False,
+            }
+        ],
+        enabled=True,
+        location='global',
+    )
+
+    # Set the budget
+    # Enable the notification of the action group
+    az.consumption.Budget(
+        f'{resource_group_name}-budget',
+        budget_name=f'{resource_group_name}-budget',
+        category='Cost',
+        time_grain=BUDGET_TIME_GRAIN,
+        amount=amount,
+        notifications={
+            'Actual_GreaterThanOrEqualTo_100_Percent': az.consumption.NotificationArgs(
+                contact_emails=[],
+                contact_groups=[action_group.id],
+                enabled=True,
+                operator='GreaterThanOrEqualTo',
+                threshold=100,
+            )
+        },
+        scope=resource_group.id,
+        time_period=az.consumption.BudgetTimePeriodArgs(
+            start_date=str(BUDGET_START_DATE),
+        ),
+        opts=pulumi.ResourceOptions(
+            delete_before_replace=True, replace_on_changes=['time_period']
+        ),
     )
 
 
