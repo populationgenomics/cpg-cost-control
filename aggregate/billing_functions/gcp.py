@@ -100,7 +100,6 @@ async def migrate_billing_data(start, end, dataset_to_topic) -> int:
             f'Processed {len(chunk)} in chunk ({time.time() - s:4f}s) [{mins}, {maxf}]'
         )
         result += utils.upsert_aggregated_dataframe_into_bigquery(df=chunk)
-        return result
 
     return result
 
