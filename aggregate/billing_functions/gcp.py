@@ -154,7 +154,7 @@ def get_dataset_to_topic_map() -> Dict[str, str]:
     server_config = json.loads(
         read_secret(utils.ANALYSIS_RUNNER_PROJECT_ID, 'server-config')
     )
-    return {v['projectId']: k for k, v in server_config.items()}
+    return {v['gcp']['projectId']: k for k, v in server_config.items()}
 
 
 ##############
@@ -195,5 +195,5 @@ if __name__ == '__main__':
     logging.getLogger('asyncio').setLevel(logging.ERROR)
     logging.getLogger('urllib3').setLevel(logging.WARNING)
 
-    test_start, test_end = datetime(2022, 11, 27), datetime(2022, 12, 1)
+    test_start, test_end = datetime(2022, 11, 27), datetime(2023, 2, 17)
     asyncio.new_event_loop().run_until_complete(main(start=test_start, end=test_end))
