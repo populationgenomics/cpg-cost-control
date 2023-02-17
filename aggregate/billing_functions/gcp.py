@@ -23,6 +23,7 @@ IMPORTANT:
 
 """
 
+import time
 import json
 import asyncio
 import hashlib
@@ -32,6 +33,7 @@ from typing import Dict
 from datetime import datetime
 
 # from pandas import DataFrame
+import rapidjson
 from cpg_utils.cloud import read_secret
 import google.cloud.bigquery as bq
 
@@ -40,10 +42,9 @@ try:
 except ImportError:
     import utils
 
-logger = utils.logger
-logger = logger.getChild('gcp')
+logger = utils.logger.getChild('gcp')
 logger.setLevel(logging.INFO)
-logger.propagate = False
+# logger.propagate = False
 
 
 ##########################
@@ -90,10 +91,16 @@ async def migrate_billing_data(start, end, dataset_to_topic) -> int:
     for chunk in get_billing_data(start, end).to_dataframe_iterable():
 
         # Add id and topic to the row
+        s = time.time()
         chunk.insert(0, 'id', chunk.apply(billing_row_to_key, axis=1))
         chunk.insert(0, 'topic', chunk.apply(get_topic, axis=1))
-
+        mins = min(chunk.get('usage_start_time'))
+        maxf = max(chunk.get('usage_end_time'))
+        logger.info(
+            f'Processed {len(chunk)} in chunk ({time.time() - s:4f}s) [{mins}, {maxf}]'
+        )
         result += utils.upsert_aggregated_dataframe_into_bigquery(df=chunk)
+        return result
 
     return result
 
@@ -133,10 +140,18 @@ def get_billing_data(start: datetime, end: datetime):
     return utils.get_bigquery_client().query(_query, job_config=job_config).result()
 
 
+DATE_FORMAT = '%Y-%m-%dT%H:%M:%S'
+
+
 def billing_row_to_key(row) -> str:
     """Convert a billing row to a hash which will be the row key"""
     identifier = hashlib.md5()
-    identifier.update(row.values.tobytes())
+    d = row.to_dict()
+    d['usage_end_time'] = d['usage_end_time'].strftime(DATE_FORMAT)
+    d['export_time'] = d['export_time'].strftime(DATE_FORMAT)
+    d['usage_start_time'] = d['usage_start_time'].strftime(DATE_FORMAT)
+
+    identifier.update(rapidjson.dumps(d, sort_keys=True).encode())
     return identifier.hexdigest()
 
 

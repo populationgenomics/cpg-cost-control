@@ -31,10 +31,14 @@ for lname in (
     logging.getLogger(lname).setLevel(logging.WARNING)
 
 logging.basicConfig()
-client = google.cloud.logging.Client()
-client.setup_logging()
+
+if os.getenv('SETUP_GCP_LOGGING'):
+    client = google.cloud.logging.Client()
+    client.setup_logging()
+
 logger = logging.getLogger('cost-aggregate')
-logger.propagate = False
+logger.setLevel(logging.INFO)
+# logger.propagate = False
 
 if os.getenv('DEBUG') in ('1', 'true', 'yes') or os.getenv('DEV') in (
     '1',
