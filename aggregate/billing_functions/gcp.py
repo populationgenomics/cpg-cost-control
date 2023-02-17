@@ -30,7 +30,8 @@ import logging
 
 from typing import Dict
 from datetime import datetime
-from pandas import DataFrame
+
+# from pandas import DataFrame
 from cpg_utils.cloud import read_secret
 import google.cloud.bigquery as bq
 
@@ -83,18 +84,16 @@ async def migrate_billing_data(start, end, dataset_to_topic) -> int:
     def get_topic(row):
         return utils.billing_row_to_topic(row, dataset_to_topic)
 
-    migrate_rows = get_billing_data(start, end)
+    # to_df_iterable pages the response so it's more manageable,
+    # this should reduce the need for the date-range iterator
+    result = 0
+    for chunk in get_billing_data(start, end).to_dataframe_iterable():
 
-    if len(migrate_rows) == 0:
-        logger.info('No rows to migrate')
-        return 0
+        # Add id and topic to the row
+        chunk.insert(0, 'id', chunk.apply(billing_row_to_key, axis=1))
+        chunk.insert(0, 'topic', chunk.apply(get_topic, axis=1))
 
-    # Add id and topic to the row
-    migrate_rows = migrate_rows.drop(columns=['billing_account_id', 'tags'])
-    migrate_rows.insert(0, 'topic', migrate_rows.apply(get_topic, axis=1))
-    migrate_rows.insert(0, 'id', migrate_rows.apply(billing_row_to_key, axis=1))
-
-    result = utils.upsert_aggregated_dataframe_into_bigquery(df=migrate_rows)
+        result += utils.upsert_aggregated_dataframe_into_bigquery(df=chunk)
 
     return result
 
@@ -104,14 +103,19 @@ async def migrate_billing_data(start, end, dataset_to_topic) -> int:
 #################
 
 
-def get_billing_data(start: datetime, end: datetime) -> DataFrame:
+def get_billing_data(start: datetime, end: datetime):
     """
     Retrieve the billing data from start to end date inclusive
     Return results as a dataframe
     """
 
     _query = f"""
-        SELECT * FROM `{utils.GCP_BILLING_BQ_TABLE}`
+        SELECT
+            service, sku, usage_start_time, usage_end_time, project,
+            labels, system_labels, location, export_time, cost,
+            currency, currency_conversion_rate, usage, credits,
+            invoice, cost_type, adjustment_info
+        FROM `{utils.GCP_BILLING_BQ_TABLE}`
         WHERE export_time >= @start
             AND export_time <= @end
             AND project.id <> @seqr_project_id
@@ -126,14 +130,7 @@ def get_billing_data(start: datetime, end: datetime) -> DataFrame:
         ]
     )
 
-    migrate_rows = (
-        utils.get_bigquery_client()
-        .query(_query, job_config=job_config)
-        .result()
-        .to_dataframe()
-    )
-
-    return migrate_rows
+    return utils.get_bigquery_client().query(_query, job_config=job_config).result()
 
 
 def billing_row_to_key(row) -> str:
@@ -158,8 +155,8 @@ def get_dataset_to_topic_map() -> Dict[str, str]:
 
 async def main(start: datetime = None, end: datetime = None) -> int:
     """Main body function"""
+    s, e = utils.process_default_start_and_end(start, end)
     logger.info(f'Running GCP Billing Aggregation for [{start}, {end}]')
-    interval_iterator = utils.get_date_intervals_for(start, end)
 
     # Storing topic map means we don't repeatedly call to access the topic
     # data mapping for each batch
@@ -169,9 +166,9 @@ async def main(start: datetime = None, end: datetime = None) -> int:
     # This is because depending on the start-end interval all of the billing
     # data may not be able to be held in memory during the migration
     # Memory is particularly limited for cloud functions
-    result = 0
-    for begin, finish in interval_iterator:
-        result += await migrate_billing_data(begin, finish, dataset_to_topic_map)
+    # result = 0
+    # for begin, finish in interval_iterator:
+    result = await migrate_billing_data(s, e, dataset_to_topic_map)
 
     logger.info(f'Migrated a total of {result} rows')
 
