@@ -94,8 +94,8 @@ async def migrate_billing_data(start, end, dataset_to_topic) -> int:
         s = time.time()
         chunk.insert(0, 'id', chunk.apply(billing_row_to_key, axis=1))
         chunk.insert(0, 'topic', chunk.apply(get_topic, axis=1))
-        mins = min(chunk.get('usage_start_time'))
-        maxf = max(chunk.get('usage_end_time'))
+        mins = min(chunk.get('export_time'))
+        maxf = max(chunk.get('export_time'))
         logger.info(
             f'Processed {len(chunk)} in chunk ({time.time() - s:4f}s) [{mins}, {maxf}]'
         )
