@@ -23,6 +23,13 @@ import google.cloud.bigquery as bq
 from cpg_utils.cloud import read_secret
 from google.api_core.exceptions import ClientError
 
+for lname in (
+    'asyncio',
+    'urllib3',
+    'google',
+):
+    logging.getLogger(lname).setLevel(logging.WARNING)
+
 logging.basicConfig()
 client = google.cloud.logging.Client()
 client.setup_logging()

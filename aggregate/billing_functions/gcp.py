@@ -30,9 +30,7 @@ import logging
 
 from typing import Dict
 from datetime import datetime
-
 from pandas import DataFrame
-
 from cpg_utils.cloud import read_secret
 import google.cloud.bigquery as bq
 
@@ -41,9 +39,9 @@ try:
 except ImportError:
     import utils
 
-
 logger = utils.logger
 logger = logger.getChild('gcp')
+logger.setLevel(logging.INFO)
 logger.propagate = False
 
 
@@ -140,12 +138,8 @@ def get_billing_data(start: datetime, end: datetime) -> DataFrame:
 
 def billing_row_to_key(row) -> str:
     """Convert a billing row to a hash which will be the row key"""
-    data = tuple(row)
     identifier = hashlib.md5()
-
-    for item in data:
-        identifier.update(str(item).encode('utf-8'))
-
+    identifier.update(row.values.tobytes())
     return identifier.hexdigest()
 
 
@@ -175,13 +169,9 @@ async def main(start: datetime = None, end: datetime = None) -> int:
     # This is because depending on the start-end interval all of the billing
     # data may not be able to be held in memory during the migration
     # Memory is particularly limited for cloud functions
-    results = [
-        migrate_billing_data(begin, finish, dataset_to_topic_map)
-        for begin, finish in interval_iterator
-    ]
-
-    results = await asyncio.gather(*results)
-    result = sum(results)
+    result = 0
+    for begin, finish in interval_iterator:
+        result += await migrate_billing_data(begin, finish, dataset_to_topic_map)
 
     logger.info(f'Migrated a total of {result} rows')
 
@@ -190,10 +180,6 @@ async def main(start: datetime = None, end: datetime = None) -> int:
 
 if __name__ == '__main__':
     # Set logging levels
-    logger.setLevel(logging.INFO)
-    logging.getLogger('google').setLevel(logging.WARNING)
-    logging.getLogger('asyncio').setLevel(logging.ERROR)
-    logging.getLogger('urllib3').setLevel(logging.WARNING)
 
-    test_start, test_end = datetime(2022, 11, 27), datetime(2023, 2, 17)
+    test_start, test_end = datetime(2022, 12, 1), datetime(2023, 2, 17)
     asyncio.new_event_loop().run_until_complete(main(start=test_start, end=test_end))
