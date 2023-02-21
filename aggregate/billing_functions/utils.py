@@ -74,7 +74,8 @@ HAIL_SERVICE_FEE = 0.0
 DEFAULT_BQ_INSERT_CHUNK_SIZE = 20000
 ANALYSIS_RUNNER_PROJECT_ID = 'analysis-runner'
 
-DEFAULT_RANGE_INTERVAL = timedelta(days=2)
+# runs every 4 hours
+DEFAULT_RANGE_INTERVAL = timedelta(hours=5)
 
 SEQR_PROJECT_ID = 'seqr-308602'
 
@@ -178,13 +179,13 @@ def chunk(iterable: Sequence[T], chunk_size) -> Iterator[Sequence[T]]:
         yield iterable[i : i + chunk_size]
 
 
-def get_total_hail_cost(currency_conversion_rate, batch_resource, usage):
+def get_total_hail_cost(currency_conversion_rate, batch_resource, raw_cost):
     """Get cost from hail batch_resource, including SERVICE_FEE"""
 
     return (
         (1 + HAIL_SERVICE_FEE)
         * currency_conversion_rate
-        * get_usd_cost_for_resource(batch_resource, usage)
+        * raw_cost
     )
 
 
@@ -724,7 +725,7 @@ def get_currency_conversion_rate_for_time(time: datetime):
     the job finishes.
     """
 
-    key = f'{time.year}-{time.month}'
+    key = f'{time.year}-{str(time.month).zfill(2)}'
     if key not in CACHED_CURRENCY_CONVERSION:
         logger.info(f'Looking up currency conversion rate for {key}')
         query = f"""
@@ -733,7 +734,14 @@ def get_currency_conversion_rate_for_time(time: datetime):
             WHERE DATE(_PARTITIONTIME) = DATE('{time.date()}')
             LIMIT 1
         """
-        for r in get_bigquery_client().query(query).result():
+        query_result = get_bigquery_client().query(query).result()
+
+        if query_result.total_rows == 0:
+            raise ValueError(
+                f'Could not find billing data for {key!r}, for {time.date()}'
+            )
+
+        for r in query_result:
             CACHED_CURRENCY_CONVERSION[key] = r['currency_conversion_rate']
 
     return CACHED_CURRENCY_CONVERSION[key]
@@ -780,15 +788,15 @@ def _generate_hail_resource_cost_lookup():
 
 
 AUSTRALIA_SOUTHEAST_1_COST = {
-    'compute/n1-preemptible/1': 2.4944444444444447e-12,
-    'compute/n1-nonpreemptible/1': 1.2466666666666668e-11,
-    'memory/n1-preemptible/1': 3.255208333333333e-13,
-    'memory/n1-nonpreemptible/1': 1.6303168402777778e-12,
-    'boot-disk/pd-ssd/1': 8.540929918624991e-14,
-    'disk/pd-ssd/1': 8.540929918624991e-14,
-    'disk/local-ssd/preemptible/1': 2.4137410639592365e-14,
-    'disk/local-ssd/nonpreemptible/1': 4.010523613963039e-14,
-    'disk/local-ssd/1': 4.010523613963039e-14,
+    'compute/n1-preemptible/australia-southeast1/1676000639321': 2.4944444444444447e-12,
+    'compute/n1-nonpreemptible/australia-southeast1/1676000639321': 1.2466666666666668e-11,
+    'memory/n1-preemptible/australia-southeast1/1676000639321': 3.255208333333333e-13,
+    'memory/n1-nonpreemptible/australia-southeast1/1676000639321': 1.6303168402777778e-12,
+    'boot-disk/pd-ssd/australia-southeast1/1676000639321': 8.540929918624991e-14,
+    'disk/pd-ssd/australia-southeast1/1676000639321': 8.540929918624991e-14,
+    'disk/local-ssd/preemptible/australia-southeast1/1676000639321': 2.4137410639592365e-14,
+    'disk/local-ssd/nonpreemptible/australia-southeast1/1676000639321': 4.010523613963039e-14,
+    'disk/local-ssd/australia-southeast1/1676000639321': 4.010523613963039e-14,
     'ip-fee/1024/1': 1.0850694444444444e-12,
     'service-fee/1': 2.777777777777778e-12,
 }
@@ -916,7 +924,7 @@ def process_default_start_and_end(
     defaults
     """
     if not end and not start:
-        # start of today
+        # start right now
         end = datetime.now()
         start = end - interval
     elif not start:

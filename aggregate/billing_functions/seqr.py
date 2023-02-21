@@ -73,10 +73,7 @@ JOBS_API = BASE + '/api/v1alpha/batches/{batch_id}/jobs/resources'
 JOB_ATTRIBUTES_IGNORE = {'name', 'dataset', 'samples'}
 RunMode = Literal['prod', 'local', 'dry-run']
 
-
-logger = utils.logger
-logger = logger.getChild('seqr')
-logger.propagate = False
+logger = utils.logger.getChild('seqr')
 
 papi = ProjectApi()
 sapi = SampleApi()
@@ -107,7 +104,7 @@ def get_finalised_entries_for_batch(
 
     currency_conversion_rate = utils.get_currency_conversion_rate_for_time(start_time)
 
-    jobs_with_no_dataset: list[tuple[dict[str, any], dict[str, any]]] = []
+    jobs_with_no_dataset: list[dict[str, any]] = []
     entries: list[dict[str, any]] = []
 
     for job in batch['jobs']:
@@ -133,10 +130,10 @@ def get_finalised_entries_for_batch(
     for job in jobs_with_no_dataset:
 
         job_id = job['job_id']
-        if not job['resources']:
+        if not job['cost']:
             continue
 
-        for batch_resource, usage in job['resources'].items():
+        for batch_resource, raw_cost in job['cost'].items():
             if batch_resource.startswith('service-fee'):
                 continue
 
@@ -147,22 +144,23 @@ def get_finalised_entries_for_batch(
                 'batch_id': str(batch_id),
                 'batch_resource': batch_resource,
                 'url': hail_ui_url,
+                'job_id': str(job_id),
             }
 
             for k, v in job.get('attributes', {}).items():
                 if k in JOB_ATTRIBUTES_IGNORE:
                     continue
                 if k == 'stage' and not v:
-                    logger.info('Empty stage')
+                    logger.info(f'Empty stage for {batch_id}/{job_id}')
                 labels[k] = str(v)
 
             # Remove any labels with falsey values e.g. None, '', 0
             labels = dict(filter(lambda l: l[1], labels.items()))
 
             gross_cost = utils.get_total_hail_cost(
-                currency_conversion_rate, batch_resource, usage
+                currency_conversion_rate, batch_resource, raw_cost=raw_cost
             )
-
+            raw_usage = job['resources'].get(batch_resource, 0)
             for dataset, (fraction, dataset_size) in prop_map.items():
                 # Distribute the remaining cost across all datasets proportionately
                 key = '-'.join(
@@ -185,7 +183,7 @@ def get_finalised_entries_for_batch(
                         description='Seqr compute (distributed)',
                         cost=gross_cost * fraction,
                         currency_conversion_rate=currency_conversion_rate,
-                        usage=round(usage * fraction),
+                        usage=round(raw_usage * fraction),
                         batch_resource=batch_resource,
                         start_time=start_time,
                         end_time=end_time,
@@ -906,9 +904,9 @@ async def main(
     )
     result = 0
 
-    result += migrate_entries_from_bq(
-        start, end, seqr_hosting_prop_map, mode=mode, output_path=output_path
-    )
+    # result += migrate_entries_from_bq(
+    #     start, end, seqr_hosting_prop_map, mode=mode, output_path=output_path
+    # )
 
     def func_get_finalised_entries(batch):
         return get_finalised_entries_for_batch(batch, shared_computation_prop_map)
@@ -952,7 +950,7 @@ if __name__ == '__main__':
     logging.getLogger('asyncio').setLevel(logging.ERROR)
     logging.getLogger('urllib3').setLevel(logging.WARNING)
 
-    test_start, test_end = datetime(2022, 10, 1), datetime(2022, 10, 3)
+    test_start, test_end = datetime(2022, 12, 1), datetime(2023, 2, 20)
     asyncio.new_event_loop().run_until_complete(
         main(start=test_start, end=test_end, mode='local', output_path=os.getcwd())
     )

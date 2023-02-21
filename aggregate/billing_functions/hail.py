@@ -75,13 +75,16 @@ def get_finalised_entries_for_batch(batch: dict) -> List[Dict]:
     currency_conversion_rate = utils.get_currency_conversion_rate_for_time(start_time)
 
     resource_usage = defaultdict(float)
+    resource_cost = defaultdict(float)
     for job in batch['jobs']:
-        if not job['resources']:
-            continue
+
         for batch_resource, usage in job['resources'].items():
             resource_usage[batch_resource] += usage
 
-    for batch_resource, usage in resource_usage.items():
+        for batch_resource, cost in job['cost'].items():
+            resource_cost[batch_resource] += cost
+
+    for batch_resource, raw_cost in resource_cost.items():
         if batch_resource.startswith('service-fee'):
             continue
 
@@ -105,8 +108,9 @@ def get_finalised_entries_for_batch(batch: dict) -> List[Dict]:
         labels = dict(filter(lambda l: l[1], labels.items()))
 
         cost = utils.get_total_hail_cost(
-            currency_conversion_rate, batch_resource, usage
+            currency_conversion_rate, batch_resource, raw_cost=raw_cost
         )
+        usage = resource_usage.get(batch_resource, 0)
         entries.append(
             utils.get_hail_entry(
                 key=(
@@ -178,5 +182,5 @@ if __name__ == '__main__':
     logging.getLogger('asyncio').setLevel(logging.ERROR)
     logging.getLogger('urllib3').setLevel(logging.WARNING)
 
-    test_start, test_end = datetime(2022, 11, 1), datetime(2022, 11, 23)
+    test_start, test_end = datetime(2022, 12, 1), datetime(2023, 2, 18)
     asyncio.new_event_loop().run_until_complete(main(start=test_start, end=test_end))
