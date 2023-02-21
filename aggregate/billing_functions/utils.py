@@ -75,7 +75,7 @@ DEFAULT_BQ_INSERT_CHUNK_SIZE = 20000
 ANALYSIS_RUNNER_PROJECT_ID = 'analysis-runner'
 
 # runs every 4 hours
-DEFAULT_RANGE_INTERVAL = timedelta(hours=5)
+DEFAULT_RANGE_INTERVAL = timedelta(hours=int(os.getenv('DEFAULT_INTERVAL_HOURS', 4)))
 
 SEQR_PROJECT_ID = 'seqr-308602'
 
@@ -923,14 +923,11 @@ def process_default_start_and_end(
     Take input start / end values, and apply
     defaults
     """
-    if not end and not start:
+    if not end:
         # start right now
         end = datetime.now()
+    if not start:
         start = end - interval
-    elif not start:
-        start = end - interval
-    elif not end:
-        end = start + interval
 
     assert isinstance(start, datetime) and isinstance(end, datetime)
     return start, end
