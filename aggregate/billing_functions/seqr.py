@@ -904,9 +904,9 @@ async def main(
     )
     result = 0
 
-    # result += migrate_entries_from_bq(
-    #     start, end, seqr_hosting_prop_map, mode=mode, output_path=output_path
-    # )
+    result += migrate_entries_from_bq(
+        start, end, seqr_hosting_prop_map, mode=mode, output_path=output_path
+    )
 
     def func_get_finalised_entries(batch):
         return get_finalised_entries_for_batch(batch, shared_computation_prop_map)
