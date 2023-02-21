@@ -12,7 +12,6 @@ from aggregate.billing_functions.utils import (
     billing_row_to_topic,
     date_range_iterator,
     get_start_and_end_from_data,
-    process_default_start_and_end,
 )
 
 
@@ -155,44 +154,3 @@ class TestUtilsFunctions(unittest.TestCase):
         # Has a valid json message
         data = {'message': json_str}
         self.assertEqual((json_strt, json_end), get_start_and_end_from_data(data))
-
-    def test_process_default_start_and_end(self):
-        """Test the default start and end"""
-
-        # No data
-        interval = timedelta(days=2)
-        start, end = (None, None)
-        strt_expected, end_expected = (
-            datetime.now().replace(microsecond=0) - interval,
-            datetime.now().replace(microsecond=0),
-        )
-        a, b = process_default_start_and_end(start, end, interval=interval)
-        a = a.replace(microsecond=0)
-        b = b.replace(microsecond=0)
-        self.assertEqual((strt_expected, end_expected), (a, b))
-
-        # End only
-        start, end = (None, datetime.fromisoformat('2019-01-02'))
-        strt_expected, end_expected = (end - interval, end)
-        self.assertEqual(
-            process_default_start_and_end(start, end, interval=interval),
-            (strt_expected, end_expected),
-        )
-
-        # Start only
-        start, end = (datetime.fromisoformat('2019-01-01'), None)
-        strt_expected, end_expected = (start, start + interval)
-        self.assertEqual(
-            process_default_start_and_end(start, end, interval=interval),
-            (strt_expected, end_expected),
-        )
-
-        # Start and end
-        start, end = (
-            datetime.fromisoformat('2019-01-01'),
-            datetime.fromisoformat('2019-01-02'),
-        )
-        self.assertEqual(
-            process_default_start_and_end(start, end, interval=interval),
-            (start, end),
-        )

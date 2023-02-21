@@ -19,6 +19,15 @@ resources = {
     'memory/n1-preemptible/1': 104356024320,
     'service-fee/1': 27176048000,
 }
+
+cost = {
+    'compute/n1-preemptible/1': 0.00015,
+    'disk/local-ssd/1': 0.00176,
+    'disk/pd-ssd/1': 0.00063,
+    'ip-fee/1024/1': 0.00000079,
+    'memory/n1-preemptible/1': 0.00001,
+    'service-fee/1': 100,
+}
 batch = {
     'id': 42,
     'time_created': '2023-03-03T11:22:33Z',
@@ -28,11 +37,13 @@ batch = {
         {
             'job_id': 1,
             'resources': resources,
+            'cost': cost,
             'attributes': {'dataset': 'DS1', 'name': 'ALL COST for DS1'},
         },
         {
             'job_id': 2,
             'resources': resources,
+            'cost': cost,
             'attributes': {'name': 'DISTRUBUTED cost for DS1/DS2'},
         },
     ],
@@ -72,4 +83,5 @@ class TestCombinationCosts(unittest.TestCase):
         seqr_cost = sum(e['cost'] for e in seqr_debit_entries)
         hail_cost = sum(e['cost'] for e in hail_debit_entries)
 
-        self.assertEqual(seqr_cost, hail_cost)
+        # at some point there is some precision here
+        self.assertAlmostEqual(seqr_cost, hail_cost, places=17)

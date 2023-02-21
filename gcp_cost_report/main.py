@@ -81,7 +81,7 @@ slack_token_response = secret_manager.access_secret_version(
     request={'name': SLACK_TOKEN_SECRET_NAME}
 )
 slack_token = slack_token_response.payload.data.decode('UTF-8')
-slack_client = slack.WebClient(token=slack_token)
+slack_client = slack.WebClient(token=slack_token)  # pylint: disable=no-member
 
 bigquery_client = bigquery.Client()
 budget_client = budget.BudgetServiceClient()

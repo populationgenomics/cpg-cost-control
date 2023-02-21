@@ -75,7 +75,7 @@ DEFAULT_BQ_INSERT_CHUNK_SIZE = 20000
 ANALYSIS_RUNNER_PROJECT_ID = 'analysis-runner'
 
 # runs every 4 hours
-DEFAULT_RANGE_INTERVAL = timedelta(hours=int(os.getenv('DEFAULT_INTERVAL_HOURS', 4)))
+DEFAULT_RANGE_INTERVAL = timedelta(hours=int(os.getenv('DEFAULT_INTERVAL_HOURS', '4')))
 
 SEQR_PROJECT_ID = 'seqr-308602'
 
@@ -179,14 +179,10 @@ def chunk(iterable: Sequence[T], chunk_size) -> Iterator[Sequence[T]]:
         yield iterable[i : i + chunk_size]
 
 
-def get_total_hail_cost(currency_conversion_rate, batch_resource, raw_cost):
+def get_total_hail_cost(currency_conversion_rate, raw_cost):
     """Get cost from hail batch_resource, including SERVICE_FEE"""
 
-    return (
-        (1 + HAIL_SERVICE_FEE)
-        * currency_conversion_rate
-        * raw_cost
-    )
+    return (1 + HAIL_SERVICE_FEE) * currency_conversion_rate * raw_cost
 
 
 def get_schema_json(file: str) -> dict[str, any]:
@@ -747,75 +743,6 @@ def get_currency_conversion_rate_for_time(time: datetime):
     return CACHED_CURRENCY_CONVERSION[key]
 
 
-def _generate_hail_resource_cost_lookup():
-    """
-    Generate the cost table for the hail resources.
-    This is currently set to the australia-southeast-1 region.
-    """
-    # pylint: disable=import-outside-toplevel,import-error
-    from hailtop.utils import (
-        rate_gib_hour_to_mib_msec,
-        rate_gib_month_to_mib_msec,
-        rate_cpu_hour_to_mcpu_msec,
-        rate_instance_hour_to_fraction_msec,
-    )
-
-    # Noting that this does not support different prices over time
-    # consider implementing something like:
-    #   https://github.com/hail-is/hail/pull/11840/files
-
-    rates = [
-        # https://cloud.google.com/compute/vm-instance-pricing#:~:text=N1%20custom%20vCPUs,that%20machine%20type.
-        ('compute/n1-preemptible/1', rate_cpu_hour_to_mcpu_msec(0.00898)),
-        ('compute/n1-nonpreemptible/1', rate_cpu_hour_to_mcpu_msec(0.04488)),
-        ('memory/n1-preemptible/1', rate_gib_hour_to_mib_msec(0.00120)),
-        ('memory/n1-nonpreemptible/1', rate_gib_hour_to_mib_msec(0.00601)),
-        # https://cloud.google.com/compute/disks-image-pricing#persistentdisk
-        ('boot-disk/pd-ssd/1', rate_gib_month_to_mib_msec(0.23)),
-        ('disk/pd-ssd/1', rate_gib_month_to_mib_msec(0.23)),
-        # https://cloud.google.com/compute/disks-image-pricing#localssdpricing
-        ('disk/local-ssd/preemptible/1', rate_gib_month_to_mib_msec(0.065)),
-        ('disk/local-ssd/nonpreemptible/1', rate_gib_month_to_mib_msec(0.108)),
-        # legacy local-ssd
-        ('disk/local-ssd/1', rate_gib_month_to_mib_msec(0.108)),
-        # https://cloud.google.com/vpc/network-pricing#:~:text=internal%20IP%20addresses.-,External%20IP%20address%20pricing,to%0Athe%20following%20table.,-If%20you%20reserve
-        ('ip-fee/1024/1', rate_instance_hour_to_fraction_msec(0.004, 1024)),
-        # custom Hail Batch service fee?
-        ('service-fee/1', rate_cpu_hour_to_mcpu_msec(0.01)),
-    ]
-    s = json.dumps(dict(rates))
-    return s
-
-
-AUSTRALIA_SOUTHEAST_1_COST = {
-    'compute/n1-preemptible/australia-southeast1/1676000639321': 2.4944444444444447e-12,
-    'compute/n1-nonpreemptible/australia-southeast1/1676000639321': 1.2466666666666668e-11,
-    'memory/n1-preemptible/australia-southeast1/1676000639321': 3.255208333333333e-13,
-    'memory/n1-nonpreemptible/australia-southeast1/1676000639321': 1.6303168402777778e-12,
-    'boot-disk/pd-ssd/australia-southeast1/1676000639321': 8.540929918624991e-14,
-    'disk/pd-ssd/australia-southeast1/1676000639321': 8.540929918624991e-14,
-    'disk/local-ssd/preemptible/australia-southeast1/1676000639321': 2.4137410639592365e-14,
-    'disk/local-ssd/nonpreemptible/australia-southeast1/1676000639321': 4.010523613963039e-14,
-    'disk/local-ssd/australia-southeast1/1676000639321': 4.010523613963039e-14,
-    'ip-fee/1024/1': 1.0850694444444444e-12,
-    'service-fee/1': 2.777777777777778e-12,
-}
-
-
-def get_usd_cost_for_resource(batch_resource, usage, region='australia-southeast-1'):
-    """
-    Get the cost of a resource in USD.
-    """
-    # TODO: consider extending this to support azure,
-    # maybe it's just a different region tag
-
-    regions = {
-        'australia-southeast-1': AUSTRALIA_SOUTHEAST_1_COST,
-    }
-
-    return regions[region][batch_resource] * usage
-
-
 def get_unit_for_batch_resource_type(batch_resource_type: str) -> str:
     """
     Get the relevant unit for some hail batch resource type
@@ -867,13 +794,13 @@ def date_range_iterator(
     dt_from = start
     dt_to = start + intv
     while dt_to < end:
-        yield (dt_from, dt_to)
+        yield dt_from, dt_to
         dt_from += intv
         dt_to += intv
 
     dt_to = min(dt_to, end)
-    if dt_from < end:
-        yield (dt_from, end)
+    if dt_from < dt_to:
+        yield dt_from, dt_to
 
 
 def get_start_and_end_from_data(data) -> tuple[Optional[datetime], Optional[datetime]]:

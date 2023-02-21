@@ -20,7 +20,7 @@
 
 disable=f-string-without-interpolation,inherit-non-class,too-few-public-methods,fixme,
      logging-fstring-interpolation,duplicate-code,logging-format-interpolation,import-error,
-     no-name-in-module, no-member
+     no-name-in-module,c-extension-no-member
 
 # Overriding variable name patterns to allow short 1- or 2-letter variables
 attr-rgx=[a-z_][a-z0-9_]{0,30}$

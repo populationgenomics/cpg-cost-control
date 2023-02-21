@@ -25,6 +25,11 @@ class TestHailGetFinalisedEntriesForBatch(unittest.TestCase):
             'memory/n1-preemptible/1': 1e6,
             'service-fee/1': 1,  # this should get filtered out
         }
+        cost = {
+            'compute/n1-preemptible/1': 1e-6,
+            'memory/n1-preemptible/1': 1.55e5,
+            'service-fee/1': 1,  # this should get filtered out
+        }
         batch = {
             'id': 42,
             'time_created': '2020-03-03T11:22:33Z',
@@ -33,11 +38,13 @@ class TestHailGetFinalisedEntriesForBatch(unittest.TestCase):
             'jobs': [
                 {
                     'job_id': 1,
+                    'cost': cost,
                     'resources': resources,
                     'attributes': {'dataset': 'DS1', 'name': 'ALL COST for DS1'},
                 },
                 {
                     'job_id': 2,
+                    'cost': cost,
                     'resources': resources,
                     'attributes': {'name': 'PROPORTIONATE_COST across DS1 / DS2'},
                 },
@@ -85,12 +92,17 @@ class TestHailGetFinalisedEntriesForBatch(unittest.TestCase):
             'memory/n1-preemptible/1': 1e6,
             'service-fee/1': 1,  # this should get filtered out
         }
+        cost = {
+            'compute/n1-preemptible/1': 1e-6,
+            'memory/n1-preemptible/1': 1.9912e-5,
+            'service-fee/1': 1,  # this should get filtered out
+        }
         batch = {
             'id': 42,
             'time_created': '2020-03-03T11:22:33Z',
             'time_completed': '2020-03-03T12:22:33Z',
             'billing_project': 'seqr',
-            'jobs': [{'job_id': 1, 'resources': resources}],
+            'jobs': [{'job_id': 1, 'cost': cost, 'resources': resources}],
             'attributes': {},
         }
 

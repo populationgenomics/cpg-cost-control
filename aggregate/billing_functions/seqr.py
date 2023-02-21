@@ -158,7 +158,7 @@ def get_finalised_entries_for_batch(
             labels = dict(filter(lambda l: l[1], labels.items()))
 
             gross_cost = utils.get_total_hail_cost(
-                currency_conversion_rate, batch_resource, raw_cost=raw_cost
+                currency_conversion_rate, raw_cost=raw_cost
             )
             raw_usage = job['resources'].get(batch_resource, 0)
             for dataset, (fraction, dataset_size) in prop_map.items():
@@ -244,20 +244,14 @@ def get_finalised_entries_for_dataset_batch_and_job(
     # Remove any labels with falsey values e.g. None, '', 0
     labels = dict(filter(lambda l: l[1], labels.items()))
 
-    resources = job['resources']
-    if not resources:
-        return []
-
-    for batch_resource, usage in resources.items():
+    for batch_resource, raw_cost in job['cost'].items():
         if batch_resource.startswith('service-fee'):
             continue
 
         labels['batch_resource'] = batch_resource
         labels['url'] = hail_ui_url
 
-        cost = utils.get_total_hail_cost(
-            currency_conversion_rate, batch_resource, usage
-        )
+        cost = utils.get_total_hail_cost(currency_conversion_rate, raw_cost=raw_cost)
 
         key = '-'.join(
             (
@@ -278,7 +272,7 @@ def get_finalised_entries_for_dataset_batch_and_job(
                 description='Seqr compute',
                 cost=cost,
                 currency_conversion_rate=currency_conversion_rate,
-                usage=usage,
+                usage=job['resources'].get(batch_resource, 0),
                 batch_resource=batch_resource,
                 start_time=batch_start_time,
                 end_time=batch_end_time,
@@ -950,7 +944,7 @@ if __name__ == '__main__':
     logging.getLogger('asyncio').setLevel(logging.ERROR)
     logging.getLogger('urllib3').setLevel(logging.WARNING)
 
-    test_start, test_end = datetime(2022, 12, 1), datetime(2023, 2, 20)
+    test_start, test_end = datetime(2023, 2, 15), None
     asyncio.new_event_loop().run_until_complete(
         main(start=test_start, end=test_end, mode='local', output_path=os.getcwd())
     )

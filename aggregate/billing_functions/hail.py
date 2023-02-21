@@ -107,9 +107,7 @@ def get_finalised_entries_for_batch(batch: dict) -> List[Dict]:
         # Remove any labels with falsey values e.g. None, '', 0
         labels = dict(filter(lambda l: l[1], labels.items()))
 
-        cost = utils.get_total_hail_cost(
-            currency_conversion_rate, batch_resource, raw_cost=raw_cost
-        )
+        cost = utils.get_total_hail_cost(currency_conversion_rate, raw_cost=raw_cost)
         usage = resource_usage.get(batch_resource, 0)
         entries.append(
             utils.get_hail_entry(
@@ -182,5 +180,5 @@ if __name__ == '__main__':
     logging.getLogger('asyncio').setLevel(logging.ERROR)
     logging.getLogger('urllib3').setLevel(logging.WARNING)
 
-    test_start, test_end = datetime(2022, 12, 1), datetime(2023, 2, 18)
+    test_start, test_end = datetime(2023, 2, 15), None
     asyncio.new_event_loop().run_until_complete(main(start=test_start, end=test_end))
