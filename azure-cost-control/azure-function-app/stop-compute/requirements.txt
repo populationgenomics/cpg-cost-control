@@ -1,5 +1,0 @@
-azure-functions
-azure-cli-core
-azure-identity
-azure-mgmt-policyinsights
-azure-mgmt-resource

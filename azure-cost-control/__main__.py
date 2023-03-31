@@ -21,9 +21,10 @@ from datetime import datetime, timedelta
 
 import os
 import pulumi
+import pulumi_docker as docker
 import pulumi_azure_native as az
 
-import helpers
+# import helpers
 
 FUNCTION_APP_CODE = os.path.abspath('./azure-function-app')
 RETENTION_DAYS = 30
@@ -118,6 +119,26 @@ def give_service_principal_roles(
     )
 
 
+def build_and_push_image(opts: dict, az_opts: dict):
+    """Builds and pushes the docker to the container regsitry"""
+    registry_info = docker.ImageRegistry(
+        server=opts.get('container_registry'),
+        username=az_opts.get('clientId'),
+        password=az_opts.get('clientSecret'),
+    )
+
+    image = docker.Image(
+        'image-azure-cost-control',
+        build=docker.DockerBuild(
+            context='azure-function-app',
+        ),
+        image_name=opts.get('name'),
+        registry=registry_info,
+    )
+
+    return image.image_name
+
+
 def create_billing_stop(
     resource_group: az.resources.ResourceGroup, opts: dict, az_opts: dict
 ):
@@ -175,13 +196,13 @@ def create_billing_stop(
         account_name=storage_account.name,
     )
 
-    code_blob = az.storage.Blob(
-        f'zip-{func_name}',
-        resource_group_name=resource_group.name,
-        account_name=storage_account.name,
-        container_name=code_container.name,
-        source=pulumi.asset.FileArchive(FUNCTION_APP_CODE),
-    )
+    # code_blob = az.storage.Blob(
+    #     f'zip-{func_name}',
+    #     resource_group_name=resource_group.name,
+    #     account_name=storage_account.name,
+    #     container_name=code_container.name,
+    #     source=pulumi.asset.FileArchive(FUNCTION_APP_CODE),
+    # )
 
     # Create the app service host plan as well as sign the blob url for the WebApp
     plan = az.web.AppServicePlan(
@@ -201,20 +222,24 @@ def create_billing_stop(
         resource_group_name=resource_group.name,
     )
 
-    deps = [storage_account, code_container, code_blob, plan, insights]
+    deps = [storage_account, code_container, plan, insights]
 
     insights_connection = insights.instrumentation_key.apply(
         lambda key: f'InstrumentationKey={key}'
     )
-    sa_connection_url = helpers.get_connection_string(resource_group, storage_account)
-    code_blob_url = helpers.signed_blob_read_url(
-        code_blob, code_container, storage_account, resource_group
-    )
+    # sa_connection_url = helpers.get_connection_string(resource_group, storage_account)
+    # code_blob_url = helpers.signed_blob_read_url(
+    #     code_blob, code_container, storage_account, resource_group
+    # )
+
+    # Create the Dockerfile
+    docker_image = build_and_push_image(opts, az_opts)
 
     # Create the WebApp
     # Passes through the policy ids, subscription and location of the billing rg
     settings = {
-        'AzureWebJobsStorage': sa_connection_url,
+        # 'AzureWebJobsStorage': sa_connection_url,
+        # 'WEBSITE_RUN_FROM_PACKAGE': code_blob_url,
         'AzureWebJobsFeatureFlags': 'EnableProxies',
         'APPINSIGHTS_INSTRUMENTATIONKEY': insights.instrumentation_key,
         'APPLICATIONINSIGHTS_CONNECTION_STRING': insights_connection,
@@ -222,7 +247,6 @@ def create_billing_stop(
         'FUNCTIONS_EXTENSION_VERSION': '~4',
         'FUNCTIONS_WORKER_RUNTIME': 'python',
         'SCM_DO_BUILD_DURING_DEPLOYMENT': True,
-        'WEBSITE_RUN_FROM_PACKAGE': code_blob_url,
         'LOCATION': az_opts.get('location'),
         'SUBSCRIPTION_ID': az_opts.get('subscriptionId'),
         'STOP_POLICY_ID': stop_policy_definition.id,
@@ -238,7 +262,7 @@ def create_billing_stop(
             app_settings=[{'name': k, 'value': v} for k, v in settings.items()],
             http20_enabled=True,
             python_version='3.9',
-            linux_fx_version='Python|3.9',
+            linux_fx_version=f'DOCKER|{docker_image}',
         ),
         opts=pulumi.ResourceOptions(depends_on=[*deps, *policies]),
     )
