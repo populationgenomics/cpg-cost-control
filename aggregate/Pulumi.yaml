@@ -1,3 +1,0 @@
-name: billing_aggregate
-description: A Google Cloud Python Pulumi program to upload billing aggregation cloud functions
-runtime: python
