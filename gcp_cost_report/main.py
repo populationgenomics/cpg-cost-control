@@ -19,6 +19,7 @@ from slack.errors import SlackApiError
 PROJECT_ID = os.getenv('GCP_PROJECT')
 BIGQUERY_BILLING_TABLE = os.getenv('BIGQUERY_BILLING_TABLE')
 QUERY_TIME_ZONE = os.getenv('QUERY_TIME_ZONE') or 'UTC'
+SLACK_MESSAGE_MAX_CHARS = 2400
 
 # Query monthly cost per project and join that with cost over the last day.
 BIGQUERY_QUERY = f"""
@@ -252,7 +253,10 @@ def gcp_cost_report(unused_data, unused_context):
             def wrap_in_mrkdwn(a):
                 return {'type': 'mrkdwn', 'text': a}
 
-            n_chunks = ceil(num_chars(header_message, list(sum(all_rows, ()))) / 2200)
+            n_chunks = ceil(
+                num_chars(header_message, list(sum(all_rows, ())))
+                / SLACK_MESSAGE_MAX_CHARS
+            )
             logging.info(f'Breaking body into {n_chunks}')
             logging.info(f'Total num rows: {len(all_rows)}')
 
