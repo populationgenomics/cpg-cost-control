@@ -6,7 +6,7 @@ import json
 import logging
 import os
 from collections import defaultdict
-from math import ceil, floor
+from math import ceil
 
 from google.cloud import bigquery
 from google.cloud import secretmanager
@@ -241,7 +241,7 @@ def gcp_cost_report(unused_data, unused_context):
         all_rows = [*totals_summary, *project_summary]
 
         def chunks(lst, n):
-            step = floor(len(lst) / n)
+            step = ceil(len(lst) / n)
             for i in range(0, len(lst), step):
                 yield lst[i : i + step]
 
