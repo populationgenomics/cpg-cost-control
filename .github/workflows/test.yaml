@@ -22,9 +22,7 @@ jobs:
         run: |
           set -euxo pipefail
 
-          pip install -r aggregate/requirements.txt
-          pip install -r aggregate/requirements-dev.txt
-          pip install -r aggregate/monthly_upload/requirements.txt
+          pip install -r requirements-dev.txt
           pip install -r gcp_cost_control/requirements.txt
           pip install -r gcp_cost_report/requirements.txt
 
@@ -35,9 +33,6 @@ jobs:
             --doctest-modules \
             --ignore gcp_cost_control \
             --ignore gcp_cost_report \
-            --ignore aggregate/__main__.py \
-            --ignore aggregate/main.py \
-            --ignore aggregate/local.py
 
       - name: "Run unit tests"
         id: runtests
