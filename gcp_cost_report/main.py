@@ -1,3 +1,4 @@
+# pylint: disable=too-many-locals
 """A Cloud Function to send a daily GCP cost report to Slack."""
 
 # import json
@@ -5,7 +6,7 @@ import json
 import logging
 import os
 from collections import defaultdict
-from typing import Tuple, List
+from math import ceil
 
 from google.cloud import bigquery
 from google.cloud import secretmanager
@@ -18,6 +19,7 @@ from slack.errors import SlackApiError
 PROJECT_ID = os.getenv('GCP_PROJECT')
 BIGQUERY_BILLING_TABLE = os.getenv('BIGQUERY_BILLING_TABLE')
 QUERY_TIME_ZONE = os.getenv('QUERY_TIME_ZONE') or 'UTC'
+SLACK_MESSAGE_MAX_CHARS = 2000
 
 # Query monthly cost per project and join that with cost over the last day.
 BIGQUERY_QUERY = f"""
@@ -25,7 +27,8 @@ SELECT
   month.id as project_id,
   month.cost as month,
   day.cost as day,
-  month.currency as currency
+  month.currency as currency,
+  month.cost_category as cost_category
 FROM
   (
     SELECT
@@ -35,7 +38,11 @@ FROM
         SELECT
           project.id,
           ROUND(SUM(cost), 2) as cost,
-          currency
+          currency,
+          (CASE
+            WHEN service.description='Cloud Storage' THEN 'Storage Cost'
+            ELSE 'Compute Cost'
+            END) as cost_category
         FROM
           `{BIGQUERY_BILLING_TABLE}`
         WHERE
@@ -44,7 +51,8 @@ FROM
                                                "{QUERY_TIME_ZONE}")
         GROUP BY
           project.id,
-          currency
+          currency,
+          cost_category
       )
     WHERE
       cost > 0.1
@@ -53,7 +61,11 @@ FROM
     SELECT
       project.id,
       ROUND(SUM(cost), 2) as cost,
-      currency
+      currency,
+      (CASE
+        WHEN service.description='Cloud Storage' THEN 'Storage Cost'
+        ELSE 'Compute Cost'
+        END) as cost_category
     FROM
       `{BIGQUERY_BILLING_TABLE}`
     WHERE
@@ -63,8 +75,10 @@ FROM
                                            "{QUERY_TIME_ZONE}")
     GROUP BY
       project.id,
-      currency
+      currency,
+      cost_category
   ) day ON month.id = day.id AND month.currency = day.currency
+  AND month.cost_category = day.cost_category
 ORDER BY
   day DESC;
 """
@@ -106,45 +120,43 @@ def try_cast_float(f):
 def gcp_cost_report(unused_data, unused_context):
     """Main entry point for the Cloud Function."""
 
-    totals = defaultdict(lambda: defaultdict(float))
+    totals = defaultdict(lambda: defaultdict(lambda: defaultdict(float)))
     budgets = budget_client.list_budgets(parent=f'billingAccounts/{BILLING_ACCOUNT_ID}')
     budgets_map = {b.display_name: b for b in budgets}
 
-    def add_currency_to_non_null_fields(fields, currency, separator=' | '):
-        return separator.join(
-            f'{field} {currency}' for field in fields if field is not None
-        )
+    def format_billing_row(project_id, fields, currency):
+        def money_format(money):
+            if money > 100:
+                return f'{money:.0f}'
+            return f'{money:.2f}'
 
-    summary_header = ('Project', '24h | month (% used)')
-    project_summary: List[Tuple[str, str]] = []
-    totals_summary: List[Tuple[str, str]] = []
+        def format_cost_categories(data, currency):
+            values = [
+                f'{k.capitalize()[0]}: {money_format(data[k])}'
+                for k in sorted(data.keys())
+            ]
+            currency = ' ' + currency if 'AUD' not in currency else ''
+            return ' '.join(values) + currency
 
-    for row in bigquery_client.query(BIGQUERY_QUERY):
-        project_id = row['project_id'] or '<none>'
-        currency = row['currency']
-        last_month = row['month']
-        last_month_str = f'{last_month:.2f}'
-        last_day_str = None
-        percent_used = None
-
-        totals[row['currency']]['month'] += row['month']
-
-        if row['day']:
-            last_day_str = f"{row['day']:.2f}"
-            totals[currency]['day'] += row['day']
-
-        row_str = add_currency_to_non_null_fields(
-            [last_day_str, last_month_str], currency
-        )
+        row_str_1 = format_cost_categories(fields['day'], currency)
+        row_str_2 = format_cost_categories(fields['month'], currency)
 
         if project_id in budgets_map:
             percent_used, percent_used_str = get_percent_used_from_budget(
                 budgets_map[project_id],
-                last_month,
+                fields['month']['total'],
                 currency,
             )
             if percent_used_str:
-                row_str += f' ({percent_used_str})'
+                row_str_2 += f' ({percent_used_str})'
+
+            # potential formatting
+            if percent_used is not None:
+                if percent_used >= 0.8:
+                    # make fields bold
+                    project_id = f'*{project_id}*'
+                    row_str_1 = f'*{row_str_1}*'
+                    row_str_2 = f'*{row_str_2}*'
 
         else:
             logging.warning(
@@ -152,14 +164,40 @@ def gcp_cost_report(unused_data, unused_context):
                 f"budgets: {', '.join(budgets_map.keys())}"
             )
 
-        # potential formatting
-        if percent_used is not None:
-            if percent_used >= 0.8:
-                # make fields bold
-                project_id = f'*{project_id}*'
-                row_str = f'*{row_str}*'
+        return project_id, row_str_1, row_str_2
 
-        project_summary.append((project_id, row_str))
+    summary_header = (
+        '*Project*',
+        '*24h cost/Month cost (% used)*',
+    )
+    project_summary: list[tuple[str, str]] = []
+    totals_summary: list[tuple[str, str]] = []
+    grouped_rows = defaultdict(
+        lambda: defaultdict(lambda: defaultdict(lambda: defaultdict(float)))
+    )
+
+    for row in bigquery_client.query(BIGQUERY_QUERY):
+        project_id = row['project_id'] or '<none>'
+        currency = row['currency']
+        cost_category = row['cost_category']
+        last_month = row['month']
+
+        totals[currency][cost_category]['month'] += row['month']
+
+        if row['day']:
+            totals[currency][cost_category]['day'] += row['day']
+
+        grouped_rows[project_id][currency]['day'][cost_category] = row['day']
+        # grouped_rows[project_id][currency]['month'][cost_category] = row['month']
+        # grouped_rows[project_id][currency]['day']['total'] += row['day']
+        grouped_rows[project_id][currency]['month']['total'] += row['month']
+
+    for project_id, by_currency in grouped_rows.items():
+        for currency, row in by_currency.items():
+            project_id, row_str_1, row_str_2 = format_billing_row(
+                project_id, row, currency
+            )
+            project_summary.append((project_id, row_str_1 + ' / ' + row_str_2))
 
     if len(totals) == 0:
         logging.info(
@@ -167,44 +205,90 @@ def gcp_cost_report(unused_data, unused_context):
         )
         return
 
-    for currency, vals in totals.items():
-        last_day_str = f"{vals['day']:.2f}"
-        last_month_str = f"{vals['month']:.2f}"
+    for currency, by_category in totals.items():
+        fields = defaultdict(lambda: defaultdict(float))
+        day_total = 0
+        month_total = 0
+        for cost_category, vals in by_category.items():
+            last_day = vals['day']
+            last_month = vals['month']
+            day_total += last_day
+            month_total += last_month
+            fields['day'][cost_category] = last_day
+            # fields['month'][cost_category] = last_month
+            # fields['day']['total'] += last_day
+            fields['month']['total'] += last_month
 
         # totals don't have percent used
+        _, a, b = format_billing_row(None, fields, currency)
         totals_summary.append(
             (
                 '_All projects:_',
-                add_currency_to_non_null_fields(
-                    [last_day_str, last_month_str], currency
-                ),
+                a + ' / ' + b,
             )
         )
 
-        all_rows = [summary_header, *totals_summary, *project_summary]
+        header_message = (
+            'Costs are Compute (C), Storage (S) and Total (T) by the past 24h '
+            'and then by month. '
+            'For further details, visit our new cost dashboard '
+            '<https://lookerstudio.google.com/s/jRJO_N3R9a4 | cost dashboard '
+            '(by topic)> '
+            'or our old cost dashboard for costs by gcp project directly '
+            '<https://lookerstudio.google.com/s/o0SqK6vPhkc | cost dashboard '
+            '(gcp direct)>.'
+        )
+        dashboard_message = {
+            'type': 'mrkdwn',
+            'text': header_message,
+        }
+        all_rows = [*totals_summary, *project_summary]
+
+        def chunks(lst, n):
+            step = ceil(len(lst) / n)
+            for i in range(0, len(lst), step):
+                yield lst[i : i + step]
+
+        def num_chars(header_message, lst):
+            return len(header_message + ''.join(lst))
+
         if len(all_rows) > 1:
 
             def wrap_in_mrkdwn(a):
                 return {'type': 'mrkdwn', 'text': a}
 
-            body = [
-                wrap_in_mrkdwn('\n'.join(a[0] for a in all_rows)),
-                wrap_in_mrkdwn('\n'.join(a[1] for a in all_rows)),
-            ]
+            n_chunks = ceil(
+                num_chars(header_message, list(sum(all_rows, ())))
+                / SLACK_MESSAGE_MAX_CHARS
+            )
+            logging.info(f'Breaking body into {n_chunks}')
+            logging.info(f'Total num rows: {len(all_rows)}')
 
-            dashboard_message = {
-                'type': 'mrkdwn',
-                'text': (
-                    'For further details, visit our <https://datastudio.google.com/'
-                    's/uTU1Zj-LHZg | cost dashboard>.'
-                ),
-            }
+            for chunk in list(chunks(all_rows, n_chunks)):
+                n_chars = num_chars(header_message, [''.join(list(a)) for a in chunk])
+                logging.info(f'Chunk rows: {len(chunk)}')
+                logging.info(f'Chunk size: {n_chars}')
 
-            blocks = [{'type': 'section', 'text': dashboard_message, 'fields': body}]
-            post_slack_message(blocks=blocks)
+                # Add header at the start
+                chunk = [summary_header] + chunk
+
+                # Add blank row at the end
+                chunk.append(['*--------------------*'] * 2)
+
+                body = [
+                    wrap_in_mrkdwn('\n'.join(a[0] for a in chunk)),
+                    wrap_in_mrkdwn('\n'.join(a[1] for a in chunk)),
+                    # wrap_in_mrkdwn('\n'.join(a[2] for a in chunk)),
+                    # wrap_in_mrkdwn('\n'.join(a[3] for a in chunk)),
+                ]
+
+                blocks = [
+                    {'type': 'section', 'text': dashboard_message, 'fields': body}
+                ]
+                post_slack_message(blocks=blocks)
 
 
-def get_percent_used_from_budget(b, last_month_total, currency) -> Tuple[float, str]:
+def get_percent_used_from_budget(b, last_month_total, currency):
     """Get percent_used as a string from GCP billing budget"""
     percent_used = None
     percent_used_str = ''
@@ -249,3 +333,7 @@ def post_slack_message(blocks):
         )
     except SlackApiError as err:
         logging.error(f'Error posting to Slack: {err}')
+
+
+if __name__ == '__main__':
+    gcp_cost_report(None, None)
