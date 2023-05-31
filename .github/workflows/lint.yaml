@@ -18,6 +18,7 @@ jobs:
 
       - name: Install packages
         run: |
+          pip install -r requirements-dev.txt
           pip install -r aggregate/requirements.txt
           pip install -r aggregate/requirements-dev.txt
           pip install -r aggregate/monthly_upload/requirements.txt
