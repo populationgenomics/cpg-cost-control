@@ -273,7 +273,7 @@ def gcp_cost_report(unused_data, unused_context):
 
         all_rows = [*totals_summary, *sorted_projects]
 
-        def chunk_list(lst):
+        def chunk_list(lst, n):
             n = max(n, 1)
             step = ceil(len(lst) / n)
             for i in range(0, len(lst), step):
