@@ -2,9 +2,11 @@
 """A Cloud Function to send a daily GCP cost report to Slack."""
 
 # import json
+import os
 import json
 import logging
-import os
+import calendar
+from datetime import date
 from collections import defaultdict
 from math import ceil
 
@@ -117,6 +119,12 @@ def try_cast_float(f):
         return None
 
 
+def month_progress() -> float:
+    """Return the percentage we are through the month"""
+    monthrange = calendar.monthrange(date.today().year, date.today().month)[1]
+    return date.today().day / monthrange
+
+
 def gcp_cost_report(unused_data, unused_context):
     """Main entry point for the Cloud Function."""
 
@@ -124,7 +132,10 @@ def gcp_cost_report(unused_data, unused_context):
     budgets = budget_client.list_budgets(parent=f'billingAccounts/{BILLING_ACCOUNT_ID}')
     budgets_map = {b.display_name: b for b in budgets}
 
-    def format_billing_row(project_id, fields, currency):
+    # Work out what percentage of the way we are through the month
+    percent_threshold = month_progress()
+
+    def format_billing_row(project_id, fields, currency, percent_threshold=0):
         def money_format(money):
             if money > 100:
                 return f'{money:.0f}'
@@ -141,6 +152,7 @@ def gcp_cost_report(unused_data, unused_context):
         row_str_1 = format_cost_categories(fields['day'], currency)
         row_str_2 = format_cost_categories(fields['month'], currency)
 
+        percent_used = 0
         if project_id in budgets_map:
             percent_used, percent_used_str = get_percent_used_from_budget(
                 budgets_map[project_id],
@@ -164,12 +176,17 @@ def gcp_cost_report(unused_data, unused_context):
                 f"budgets: {', '.join(budgets_map.keys())}"
             )
 
-        return project_id, row_str_1, row_str_2
+        sort_key = (
+            percent_used if percent_used >= percent_threshold else 0,
+            sum(fields['day'].values()),
+        )
 
-    summary_header = (
-        '*Project*',
+        return sort_key, project_id, row_str_1, row_str_2
+
+    summary_header = [
+        '*Flagged Projects*',
         '*24h cost/Month cost (% used)*',
-    )
+    ]
     project_summary: list[tuple[str, str]] = []
     totals_summary: list[tuple[str, str]] = []
     grouped_rows = defaultdict(
@@ -188,16 +205,16 @@ def gcp_cost_report(unused_data, unused_context):
             totals[currency][cost_category]['day'] += row['day']
 
         grouped_rows[project_id][currency]['day'][cost_category] = row['day']
-        # grouped_rows[project_id][currency]['month'][cost_category] = row['month']
-        # grouped_rows[project_id][currency]['day']['total'] += row['day']
         grouped_rows[project_id][currency]['month']['total'] += row['month']
 
     for project_id, by_currency in grouped_rows.items():
         for currency, row in by_currency.items():
-            project_id, row_str_1, row_str_2 = format_billing_row(
-                project_id, row, currency
+            sort_key, project_id, row_str_1, row_str_2 = format_billing_row(
+                project_id, row, currency, percent_threshold
             )
-            project_summary.append((project_id, row_str_1 + ' / ' + row_str_2))
+            project_summary.append(
+                {'sort': sort_key, 'value': (project_id, row_str_1 + ' / ' + row_str_2)}
+            )
 
     if len(totals) == 0:
         logging.info(
@@ -220,7 +237,7 @@ def gcp_cost_report(unused_data, unused_context):
             fields['month']['total'] += last_month
 
         # totals don't have percent used
-        _, a, b = format_billing_row(None, fields, currency)
+        _, _, a, b = format_billing_row(None, fields, currency)
         totals_summary.append(
             (
                 '_All projects:_',
@@ -229,57 +246,77 @@ def gcp_cost_report(unused_data, unused_context):
         )
 
         header_message = (
-            'Costs are Compute (C), Storage (S) and Total (T) by the past 24h '
-            'and then by month. '
-            'For further details, visit our new cost dashboard '
-            '<https://lookerstudio.google.com/s/jRJO_N3R9a4 | cost dashboard '
-            '(by topic)> '
-            'or our old cost dashboard for costs by gcp project directly '
-            '<https://lookerstudio.google.com/s/o0SqK6vPhkc | cost dashboard '
-            '(gcp direct)>.'
+            'Costs are Compute (C), Storage (S) and Total (T) by the past 24h and then '
+            f'by month. Sorted by percent used (if > {percent_threshold*100:.0f}%) '
+            'followed by sum of daily cost descending. This first message contains all '
+            'flagged projects that are exceeding the budget so far this month. '
+            'For visual breakdowns see the '
+            '<https://lookerstudio.google.com/s/jRJO_N3R9a4 | new cost dashboard '
+            '(by topic)> or our '
+            '<https://lookerstudio.google.com/s/o0SqK6vPhkc | old cost dashboard'
+            ' (gcp direct)> for costs by gcp project directly.'
         )
         dashboard_message = {
             'type': 'mrkdwn',
             'text': header_message,
         }
-        all_rows = [*totals_summary, *project_summary]
+        flagged_projects = [
+            x['value']
+            for x in sorted(project_summary, key=lambda x: x['sort'], reverse=True)
+            if x['sort'][0]
+        ]
+        sorted_projects = [
+            x['value']
+            for x in sorted(project_summary, key=lambda x: x['sort'], reverse=True)
+            if not x['sort'][0]
+        ]
 
-        def chunks(lst, n):
+        all_rows = [*totals_summary, *sorted_projects]
+
+        def chunk_list(lst, n):
+            n = max(n, 1)
             step = ceil(len(lst) / n)
             for i in range(0, len(lst), step):
                 yield lst[i : i + step]
 
-        def num_chars(header_message, lst):
-            return len(header_message + ''.join(lst))
+        def num_chars(lst):
+            return len(''.join(lst))
 
-        if len(all_rows) > 1:
+        if len(all_rows) > 1 or len(flagged_projects) > 1:
 
             def wrap_in_mrkdwn(a):
                 return {'type': 'mrkdwn', 'text': a}
 
             n_chunks = ceil(
-                num_chars(header_message, list(sum(all_rows, ())))
-                / SLACK_MESSAGE_MAX_CHARS
+                num_chars(list(sum(all_rows, ()))) / SLACK_MESSAGE_MAX_CHARS
             )
             logging.info(f'Breaking body into {n_chunks}')
             logging.info(f'Total num rows: {len(all_rows)}')
 
-            for chunk in list(chunks(all_rows, n_chunks)):
-                n_chars = num_chars(header_message, [''.join(list(a)) for a in chunk])
+            # Make first chunk the flagged projects, then chunk by size after
+            chunks = [flagged_projects] + list(chunk_list(all_rows, n_chunks))
+
+            for i, chunk in enumerate(chunks):
+                n_chars = num_chars([''.join(list(a)) for a in chunk])
                 logging.info(f'Chunk rows: {len(chunk)}')
                 logging.info(f'Chunk size: {n_chars}')
 
                 # Add header at the start
-                chunk = [summary_header] + chunk
+                logging.info(f'Chunk: {chunk}')
 
-                # Add blank row at the end
+                # Only post dashboard message on first chunk
+                # and switch to 'Projects' not 'Flagged Projects' after first chunk
+                if i != 0:
+                    summary_header[0] = '*Projects*'
+                    dashboard_message['text'] = ' '
+
+                # Add header to the top and a blank row at the end
+                chunk = [summary_header] + chunk
                 chunk.append(['*--------------------*'] * 2)
 
                 body = [
                     wrap_in_mrkdwn('\n'.join(a[0] for a in chunk)),
                     wrap_in_mrkdwn('\n'.join(a[1] for a in chunk)),
-                    # wrap_in_mrkdwn('\n'.join(a[2] for a in chunk)),
-                    # wrap_in_mrkdwn('\n'.join(a[3] for a in chunk)),
                 ]
 
                 blocks = [
