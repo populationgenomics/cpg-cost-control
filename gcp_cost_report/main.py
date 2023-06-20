@@ -137,6 +137,8 @@ def gcp_cost_report(unused_data, unused_context):
 
     def format_billing_row(project_id, fields, currency, percent_threshold=0):
         def money_format(money):
+            if money is None:
+                return ''
             if money > 100:
                 return f'{money:.0f}'
             return f'{money:.2f}'
@@ -178,7 +180,7 @@ def gcp_cost_report(unused_data, unused_context):
 
         sort_key = (
             percent_used if percent_used >= percent_threshold else 0,
-            sum(fields['day'].values()),
+            sum([x for x in fields['day'].values() if x]),
         )
 
         return sort_key, project_id, row_str_1, row_str_2
