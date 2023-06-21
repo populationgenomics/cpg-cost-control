@@ -180,7 +180,7 @@ def gcp_cost_report(unused_data, unused_context):
 
         sort_key = (
             percent_used if percent_used >= percent_threshold else 0,
-            sum([x for x in fields['day'].values() if x]),
+            sum(x for x in fields['day'].values() if x),
         )
 
         return sort_key, project_id, row_str_1, row_str_2
