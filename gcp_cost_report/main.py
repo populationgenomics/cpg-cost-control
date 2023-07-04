@@ -39,7 +39,7 @@ FROM
       (
         SELECT
           project.id,
-          ROUND(SUM(cost), 2) as cost,
+          SUM(cost) as cost,
           currency,
           (CASE
             WHEN service.description='Cloud Storage' THEN 'Storage Cost'
@@ -50,7 +50,7 @@ FROM
         WHERE
           _PARTITIONTIME >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 32 DAY)
           AND invoice.month = FORMAT_TIMESTAMP("%Y%m", CURRENT_TIMESTAMP(),
-                                               "{QUERY_TIME_ZONE}")
+            "{QUERY_TIME_ZONE}")
         GROUP BY
           project.id,
           currency,
@@ -62,7 +62,7 @@ FROM
   LEFT JOIN (
     SELECT
       project.id,
-      ROUND(SUM(cost), 2) as cost,
+      SUM(cost) as cost,
       currency,
       (CASE
         WHEN service.description='Cloud Storage' THEN 'Storage Cost'
@@ -74,7 +74,7 @@ FROM
       _PARTITIONTIME >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 2 DAY)
       AND export_time > TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 1 DAY)
       AND invoice.month = FORMAT_TIMESTAMP("%Y%m", CURRENT_TIMESTAMP(),
-                                           "{QUERY_TIME_ZONE}")
+        "{QUERY_TIME_ZONE}")
     GROUP BY
       project.id,
       currency,
@@ -138,7 +138,9 @@ def gcp_cost_report(unused_data, unused_context):
     def format_billing_row(project_id, fields, currency, percent_threshold=0):
         def money_format(money):
             if money is None:
-                return ''
+                return None
+            elif money < 0.01:
+                return '<0.01'
             if money > 100:
                 return f'{money:.0f}'
             return f'{money:.2f}'
@@ -147,6 +149,7 @@ def gcp_cost_report(unused_data, unused_context):
             values = [
                 f'{k.capitalize()[0]}: {money_format(data[k])}'
                 for k in sorted(data.keys())
+                if money_format(data[k]) is not None
             ]
             currency = ' ' + currency if 'AUD' not in currency else ''
             return ' '.join(values) + currency
@@ -181,7 +184,12 @@ def gcp_cost_report(unused_data, unused_context):
         sort_key = (
             percent_used if percent_used >= percent_threshold else 0,
             sum(x for x in fields['day'].values() if x),
+            sum(x for x in fields['month'].values() if x),
         )
+
+        # Placeholder string for no data
+        row_str_1 = row_str_1 if row_str_1 else 'No daily cost'
+        row_str_2 = row_str_2 if row_str_2 else 'No monthly cost'
 
         return sort_key, project_id, row_str_1, row_str_2
 
@@ -220,7 +228,7 @@ def gcp_cost_report(unused_data, unused_context):
 
     if len(totals) == 0:
         logging.info(
-            "No information to log, this function won't log anything to slack."
+            'No information to log, this function won\'t log anything to slack.'
         )
         return
 
@@ -274,6 +282,9 @@ def gcp_cost_report(unused_data, unused_context):
         ]
 
         all_rows = [*totals_summary, *sorted_projects]
+
+        if len(flagged_projects) < 1:
+            flagged_projects = [('No flagged projects', '-')]
 
         def chunk_list(lst, n):
             n = max(n, 1)
@@ -352,7 +363,7 @@ def get_percent_used_from_budget(b, last_month_total, currency):
 
     else:
         logging.warning(
-            "Couldn't determine the budget amount from the budget, "
+            'Couldn\'t determine the budget amount from the budget, '
             f'inner_amount.units: {inner_amount.units}, '
             f'monthly_used_float: {monthly_used_float}'
         )
@@ -360,18 +371,26 @@ def get_percent_used_from_budget(b, last_month_total, currency):
     return percent_used, percent_used_str
 
 
-def post_slack_message(blocks):
+def post_slack_message(blocks, thread_ts=None):
     """Posts the given text as message to Slack."""
     try:
-        slack_client.api_call(  # pylint: disable=duplicate-code
+        if thread_ts:
+            logging.info(f'Posting in thread {thread_ts}')
+
+        result = slack_client.api_call(  # pylint: disable=duplicate-code
             'chat.postMessage',
             json={
                 'channel': SLACK_CHANNEL,
                 'blocks': json.dumps(blocks),
+                'thread_ts': thread_ts,
+                'reply_broadcast': False
             },
         )
     except SlackApiError as err:
         logging.error(f'Error posting to Slack: {err}')
+
+    logging.info(f'Slack API response: {result}')
+    return result.get('ts')
 
 
 if __name__ == '__main__':
